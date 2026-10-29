@@ -2,7 +2,7 @@
 
 import { api } from '../api';
 import type { Message, MessageVersions } from '../types';
-import { clear, el, formatDateTime, linkify } from '../util';
+import { clear, el, formatDateTime, richNodes } from '../util';
 import { modalHeader, openModal } from './dialog';
 
 export function openVersions(m: Message): void {
@@ -26,13 +26,13 @@ export function openVersions(m: Message): void {
         el('div', { class: 'version-head' },
           el('strong', null, v.version === 1 ? 'Original' : `Fassung ${v.version}`),
           el('span', { class: 'muted small' }, `ersetzt ${formatDateTime(v.replacedAt)}`)),
-        el('p', { class: 'version-text' }, ...(v.text ? linkify(v.text) : [el('em', { class: 'muted' }, 'ohne Text')]))));
+        el('p', { class: 'version-text' }, ...(v.text ? richNodes(v.text) : [el('em', { class: 'muted' }, 'ohne Text')]))));
     }
     list.append(el('li', { class: 'version current' },
       el('div', { class: 'version-head' },
         el('strong', null, 'Aktuell'),
         el('span', { class: 'muted small' }, data.current.editedAt ? `bearbeitet ${formatDateTime(data.current.editedAt)}` : '')),
-      el('p', { class: 'version-text' }, ...(data.current.text ? linkify(data.current.text) : [el('em', { class: 'muted' }, 'ohne Text')]))));
+      el('p', { class: 'version-text' }, ...(data.current.text ? richNodes(data.current.text) : [el('em', { class: 'muted' }, 'ohne Text')]))));
     body.append(list);
   };
   const load = async (): Promise<void> => {

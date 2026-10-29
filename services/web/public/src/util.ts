@@ -1,5 +1,6 @@
 // Small DOM and formatting helpers. No framework, no dependencies.
 
+import { parseRich, type RichNode } from './richtext';
 import type { ConnState } from './types';
 
 type Child = Node | string | number | null | undefined | false;
@@ -222,6 +223,26 @@ export function linkify(text: string): Node[] {
   }
   if (last < text.length) out.push(document.createTextNode(text.slice(last)));
   return out;
+}
+
+function richToDom(nodes: RichNode[]): Node[] {
+  const out: Node[] = [];
+  for (const n of nodes) {
+    switch (n.t) {
+      case 'text': out.push(...linkify(n.v)); break;
+      case 'b': out.push(el('strong', null, ...richToDom(n.c))); break;
+      case 'i': out.push(el('em', null, ...richToDom(n.c))); break;
+      case 's': out.push(el('s', null, ...richToDom(n.c))); break;
+      case 'code': out.push(el('span', { class: 'mono' }, n.v)); break;
+      case 'pre': out.push(el('span', { class: 'mono mono-block' }, n.v)); break;
+    }
+  }
+  return out;
+}
+
+/** Message text with WhatsApp formatting (*bold*, _italic_, ~strike~, `code`) and clickable links. DOM nodes only, no innerHTML. */
+export function richNodes(text: string): Node[] {
+  return richToDom(parseRich(text));
 }
 
 /** Splits text at case-insensitive matches of `needle` and wraps matches in <mark>. */

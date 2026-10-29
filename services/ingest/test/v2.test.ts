@@ -89,6 +89,32 @@ describe('normalizeMessage: Einmal-Ansehen (Probe und optionales Speichern)', ()
   })
 })
 
+describe('normalizeMessage: Erwaehnungen', () => {
+  const text = (t: string, mentioned: string[]) =>
+    rawMsg({ extendedTextMessage: { text: t, contextInfo: { mentionedJid: mentioned } } })
+
+  it('ersetzt @Nummer durch den bekannten Namen, sonst durch die Telefonnummer; Unbekanntes und Fremdes bleibt', () => {
+    const env = envOf({ nameOf: (j) => (j === '491701111111@s.whatsapp.net' ? 'Lisa' : undefined) })
+    const m = msgOf(text('@491701111111 und @491702222222 und @999 bringt Kuchen mit', ['491701111111@s.whatsapp.net', '491702222222:7@s.whatsapp.net', '999@s.whatsapp.net']), env)
+    assert.equal(m.text, '@Lisa und @+491702222222 und @999 bringt Kuchen mit')
+  })
+
+  it('LID-Erwaehnung wird ueber die Zuordnung aufgeloest; ohne Zuordnung bleibt der Text', () => {
+    const env = envOf({ pnForLid: (l) => (l === '123456789012@lid' ? '491703333333@s.whatsapp.net' : undefined), nameOf: (j) => (j === '491703333333@s.whatsapp.net' ? 'Tom' : undefined) })
+    assert.equal(msgOf(text('Hallo @123456789012!', ['123456789012@lid']), env).text, 'Hallo @Tom!')
+    assert.equal(msgOf(text('Hallo @555555555555!', ['555555555555@lid']), env).text, 'Hallo @555555555555!')
+  })
+
+  it('eine laengere Nummer, die mit der gemeinten beginnt, wird nicht angefasst', () => {
+    const env = envOf({ nameOf: () => 'Lisa' })
+    assert.equal(msgOf(text('@49170111 und @491701119999', ['49170111@s.whatsapp.net']), env).text, '@Lisa und @491701119999')
+  })
+
+  it('ohne mentionedJid aendert sich nichts', () => {
+    assert.equal(msgOf(rawMsg({ conversation: 'schreib an @4917011111 bitte' })).text, 'schreib an @4917011111 bitte')
+  })
+})
+
 describe('normalizeMessage: Zitat-Kurztext und Bearbeitung', () => {
   const reply = (quotedMessage: any, extra: any = {}) =>
     rawMsg({ extendedTextMessage: { text: 'Antwort', contextInfo: { stanzaId: 'ORIG', quotedMessage, participant: '491709999999:5@s.whatsapp.net', ...extra } } })

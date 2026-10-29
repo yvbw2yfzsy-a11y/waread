@@ -7,7 +7,7 @@
 import { api } from '../api';
 import { isNew, loadMedia } from '../store';
 import type { Message, MessageType, QuotedRef } from '../types';
-import { colorFor, el, formatBytes, formatTime, linkify } from '../util';
+import { colorFor, el, formatBytes, formatTime, richNodes } from '../util';
 import { audioPlayer } from './audioPlayer';
 import { icon, typeIcon } from './icons';
 
@@ -105,7 +105,7 @@ function quoteBlock(q: QuotedRef, ctx: BubbleCtx): HTMLElement {
 }
 
 function textNodes(text: string): HTMLElement {
-  return el('p', { class: 'text' }, ...linkify(text));
+  return el('p', { class: 'text' }, ...richNodes(text));
 }
 
 function imageBlock(m: Message, ctx: BubbleCtx): HTMLElement {
@@ -198,7 +198,7 @@ export function buildBubble(m: Message, ctx: BubbleCtx): HTMLElement {
       const block = m.type === 'video' ? videoBlock(m) : imageBlock(m, ctx);
       bubble.append(block);
       if (isSticker(m) && !caption) bubble.classList.add('is-sticker');
-      if (caption) bubble.append(el('p', { class: 'text caption' }, ...linkify(caption), meta));
+      if (caption) bubble.append(el('p', { class: 'text caption' }, ...richNodes(caption), meta));
       else { bubble.classList.add('meta-overlay'); bubble.append(meta); }
       break;
     }
@@ -211,7 +211,7 @@ export function buildBubble(m: Message, ctx: BubbleCtx): HTMLElement {
     case 'document': {
       bubble.classList.add('has-doc');
       bubble.append(documentTile(m));
-      if (m.caption) bubble.append(el('p', { class: 'text caption' }, ...linkify(m.caption)));
+      if (m.caption) bubble.append(el('p', { class: 'text caption' }, ...richNodes(m.caption)));
       bubble.append(meta);
       break;
     }

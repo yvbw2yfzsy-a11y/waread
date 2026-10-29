@@ -399,21 +399,44 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
       hasSha: toBase64(body?.fileSha256) !== null && toBase64(body?.fileSha256) !== '',
     }
   }
-  const msg = (type: MessageType, text: string | undefined, media?: NormalizedMedia): NormalizeResult => ({
-    kind: 'message',
-    message: {
-      ...base,
-      type,
-      ...(text ? { text } : {}),
-      ...(replyTo ? { replyTo } : {}),
-      ...(quoted?.text ? { replyText: quoted.text } : {}),
-      ...(quoted?.sender ? { replySender: quoted.sender } : {}),
-      ...(quoted?.type ? { replyType: quoted.type } : {}),
-      ...(media ? { media } : {}),
-      ...(isViewOnce ? { viewOnce: true } : {}),
-      ...(probe ? { viewOnceProbe: probe } : {}),
-    },
-  })
+  /**
+   * Erwaehnungen: WhatsApp schreibt "@<Nummer>" in den Text (bei neueren Konten die LID-Nummer) und nennt die gemeinten
+   * Personen in contextInfo.mentionedJid. Wo ein Name oder eine Telefonnummer bekannt ist, steht danach "@Name".
+   * Unbekannte bleiben, wie sie sind. Rein lokal, keine Anfrage an WhatsApp.
+   */
+  const mentioned: unknown = ctxInfo?.mentionedJid
+  const withMentions = (text: string): string => {
+    if (!Array.isArray(mentioned) || !text.includes('@')) return text
+    let out = text
+    for (const raw of mentioned) {
+      if (typeof raw !== 'string') continue
+      const user = (raw.split('@')[0] ?? '').split(':')[0] ?? ''
+      if (!/^\d{4,25}$/.test(user)) continue
+      const jid = resolveJid(raw, undefined, env)
+      const label = jid ? (env.nameOf(jid) ?? phoneLabel(jid)) : undefined
+      if (!label) continue
+      out = out.replace(new RegExp(`@${user}(?!\\d)`, 'g'), () => `@${label}`)
+    }
+    return out
+  }
+  const msg = (type: MessageType, rawText: string | undefined, media?: NormalizedMedia): NormalizeResult => {
+    const text = rawText ? withMentions(rawText) : rawText
+    return {
+      kind: 'message',
+      message: {
+        ...base,
+        type,
+        ...(text ? { text } : {}),
+        ...(replyTo ? { replyTo } : {}),
+        ...(quoted?.text ? { replyText: quoted.text } : {}),
+        ...(quoted?.sender ? { replySender: quoted.sender } : {}),
+        ...(quoted?.type ? { replyType: quoted.type } : {}),
+        ...(media ? { media } : {}),
+        ...(isViewOnce ? { viewOnce: true } : {}),
+        ...(probe ? { viewOnceProbe: probe } : {}),
+      },
+    }
+  }
 
   if (isViewOnce && !(env.storeViewOnce === true && kind1 !== null && probe?.hasKey === true)) {
     return msg('system', kind1 ? PLACEHOLDER.viewOnceKind[kind1] : PLACEHOLDER.viewOnce)

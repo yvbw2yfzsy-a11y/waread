@@ -76,6 +76,7 @@ mv(A, 'l3', tt(0, 39), 'video', null, { media: { mimeType: 'video/mp4', sizeByte
 mv(A, 'l4', tt(0, 38), 'image', null, { media: { mimeType: 'image/jpeg', status: 'expired' } });
 mv(A, 'doc1', tt(0, 37), 'document', null, { media: ready('doc1__Mietvertrag Entwurf.pdf', 'application/pdf', 182400) });
 mv(A, 's1', tt(0, 36), 'image', null, { media: ready('sticker.webp', 'image/webp', webp.length) });
+mv(A, 'f1', tt(0, 35), 'text', 'Ich schreibe *fett*, _kursiv_, ~weg~ und `code`: https://example.org/a_b_c');
 mv(A, 'last', tt(0, 5), 'text', 'Bis später!');
 
 chat(G, 'Familie', true, tt(0, 12));
@@ -235,6 +236,13 @@ let anna;
   await settle(page, 600);
   const cmds = dbq('SELECT type, payload_json FROM ingest_commands');
   ok('Jetzt laden: Befehl liegt in der Datenbank, Platzhalter zeigt "Wird geladen"', cmds.length === 1 && cmds[0].type === 'load_media' && JSON.parse(cmds[0].payload_json).messageId === 'l1' && (await l1.innerText()).includes('Wird geladen'), cmds);
+
+  const f1 = row(page, 'f1');
+  await f1.scrollIntoViewIfNeeded();
+  ok('Formatierung: fett, kursiv, durchgestrichen, Code; Link bleibt heil', (await f1.locator('strong').innerText()) === 'fett' && (await f1.locator('em').innerText()) === 'kursiv' && (await f1.locator('s').innerText()) === 'weg' && (await f1.locator('.mono').innerText()) === 'code' && (await f1.locator('a.link').innerText()) === 'https://example.org/a_b_c');
+  const mf = await page.request.get(BASE + 'manifest.webmanifest');
+  const icon = await page.request.get(BASE + 'apple-touch-icon.png');
+  ok('Manifest und Home-Bildschirm-Symbol werden ausgeliefert', mf.ok() && (await mf.json()).name === 'waread' && icon.ok() && (icon.headers()['content-type'] ?? '').includes('image/png'), [mf.status(), icon.status()]);
 
   const doc = row(page, 'doc1');
   await doc.scrollIntoViewIfNeeded();
