@@ -97,7 +97,7 @@ Datei `/etc/waread/config.toml` (Ort überschreibbar mit der Umgebungsvariable `
 | `web.cookie_secure` | `"auto"` | `"auto"` = Secure, wenn der lokale Nginx `X-Forwarded-Proto: https` meldet; sonst `true`/`false`. |
 | `web.login_max_attempts` / `web.login_window_minutes` | `5` / `15` | Rate-Limit pro Client-IP (im Speicher; Neustart setzt zurück). |
 | `web.check_origin` | `false` | Optional: Bei POST/PUT muss `Origin` zum Host passen (zusätzlich zu SameSite=Strict). Nur aktivieren, wenn Nginx `Host` bzw. `X-Forwarded-Host` durchreicht, sonst scheitern alle schreibenden Anfragen mit 403. |
-| `web.hide_deleted_content` | `true` | Text/Medien als gelöscht markierter Nachrichten nicht ausliefern (nicht suchbar, kein Medienabruf). **Wirkungslos, solange der Ingest keine Löschungen verarbeitet** (F19): die Spalte `deleted` bleibt 0. |
+| `web.hide_deleted_content` | `false` | `true`: Text/Medien als „für alle gelöscht“ markierter Nachrichten nicht ausliefern (nicht suchbar, kein Medienabruf); die Oberfläche zeigt nur „Vom Absender gelöscht“. `false` (Standard ab Version 2): Inhalt bleibt lesbar und wird beschriftet. Der Ingest erkennt Löschungen über `messages.update`. Eine vorhandene `config.toml` behält ihren alten Wert (frühere Fassungen: `true`). |
 | `web.passkey_rp_id` **und** `web.passkey_origin` | nicht gesetzt = Passkeys aus | Beides zusammen oder gar nichts. `rp_id`: Host-Name in Kleinbuchstaben (keine IP). `origin`: genau `https://<Host>[:Port]` (nur `localhost` darf `http` sein), der Host muss `rp_id` sein oder darunter liegen. Fehler werden beim Start gemeldet. |
 | `web.passkey_file` | `/var/lib/waread/passkeys.json` | Zustand der Passkeys und der Sperre (Rechte 0600, atomar geschrieben). Unlesbar oder ungültig: die Sperre bleibt zu. |
 | `web.passkey_session_hours` | `12` | Laufzeit der Sitzung nach Passkey-Anmeldung (1–720). Offene Entscheidung des Betreibers. |
@@ -158,6 +158,14 @@ enthalten); bei Fehlern nur Name und Code. Der Test prüft, dass Nachrichtentext
 Beim Login-Fehlschlag und bei Sperren wird die Client-IP protokolliert.
 
 **Netz.** Lauscht ausschließlich auf `127.0.0.1` (fest im Code, getestet). Der Dienst bietet kein HTTPS an; das ist Sache von Nginx.
+
+### Version 2 im Sicherheitsmodell
+
+Neue Routen (alle nur mit Sitzung, Beschreibung in `routes.md`): `GET api/messages/:id/versions`, `POST api/messages/:id/protect`, `POST api/media/:id/load`,
+`PUT api/chats/:id/mute`; `POST api/storage/clear` kennt `includeProtected`. Eingaben sind streng geprüft (Boolean statt Wahrheitswert-Strings; `includeProtected`
+nur mit genau `true`). Der Web-Dienst bleibt ohne ausgehenden Verkehr: „Medium jetzt laden“ legt nur eine Zeile in `ingest_commands` ab (Nachrichten-ID, nur für
+vorhandene, ladbare Medien; ein wartender Befehl pro Nachricht), der Ingest führt sie aus. Das Schild schützt vor jedem Löschen ausser `includeProtected: true`.
+Antworten enthalten weiter keine Dateisystempfade; der Dokumentname kommt aus dem Dateinamen ohne Nachrichten-ID.
 
 ## 6. Festlegungen beim Zusammenführen und offene Abstimmungspunkte
 
