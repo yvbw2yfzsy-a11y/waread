@@ -117,7 +117,10 @@ nach einer Abmeldung oder einem abgelaufenen QR, in dem der Ingest von sich aus 
   "lastMessageDirection": "in",      // in|out
   "lastMessageAt": 1700000010,       // waTimestamp der letzten Nachricht
   "lastMessageDeleted": false,
-  "unreadCount": 3                   // „neu": eingehend, seenAt = null, nicht gelöscht, kein System
+  "lastMessageDurationSeconds": 63,  // number | null (Sprachnachricht/Video als letzte Nachricht)
+  "lastMessageSender": "Lisa",       // string | null: Absender der letzten EINGEHENDEN Nachricht (Gruppenvorschau)
+  "unreadCount": 3,                  // „neu": eingehend, seenAt = null, nicht gelöscht, kein System
+  "muted": false                     // [Version 2] stumm: reine Anzeige, zählt im Frontend nicht bei „Neu"
 }
 ```
 Für Medien ohne Text ist `lastMessagePreview` `null`; das Frontend zeigt dann ein Symbol/Label passend zu `lastMessageType`.
@@ -145,8 +148,14 @@ die `limit` Nachrichten **streng davor**.
   "type": "image",                   // text|image|voice|video|document|system
   "text": "Foto vom See",            // Text bzw. Bildunterschrift; null bei geloeschten Nachrichten
   "replyTo": null,                   // ID der zitierten Nachricht | null
+  "quoted": null,                    // [Version 2] siehe unten; null, wenn replyTo null ist
   "edited": false,
-  "deleted": false,
+  "editedAt": null,                  // number | null, Zeitpunkt der letzten Bearbeitung
+  "editCount": 0,                    // Zahl früherer Fassungen (GET api/messages/:id/versions)
+  "deleted": false,                  // „für alle gelöscht" (vom Absender)
+  "deletedAt": null,                 // number | null
+  "viewOnce": false,                 // Einmal-Ansehen-Nachricht (nur Kennzeichnung)
+  "protectedAt": null,               // number | null: Schild; geschützte Nachrichten löscht kein automatischer Lauf
   "seenAt": null,                    // number | null  – null = „neu" (gelb), nur für direction "in" relevant
   "playedAt": null,                  // number | null  – bei voice: null = noch nicht angehört
   "media": {                         // null, wenn die Nachricht keine Medien hat
@@ -154,13 +163,28 @@ die `limit` Nachrichten **streng davor**.
     "mimeType": "image/jpeg",        // string | null
     "sizeBytes": 2000,               // number | null
     "durationSeconds": null,         // number | null
-    "hasThumbnail": true             // true -> GET api/media/<id>?thumb=1
+    "hasThumbnail": true,            // true -> GET api/media/<id>?thumb=1
+    "fileName": null,                // Originalname bei Dokumenten (ohne Nachrichten-ID), sonst null
+    "skipReason": null,              // rule_off | too_large | history | queue_full | retention | failed | link_expired | null
+    "loadable": false                // true -> POST api/media/<id>/load ist möglich
   }
 }
 ```
-- **Gelöschte Nachrichten** (`deleted: true`): `text` und `media` sind `null`, die Medien sind nicht abrufbar
-  (konfigurierbar, siehe README `web.hide_deleted_content`). Das Frontend zeigt „Diese Nachricht wurde gelöscht".
+- **Gelöschte Nachrichten** (`deleted: true`, „für alle gelöscht" vom Absender): Standardmäßig bleiben `text` und `media`
+  erhalten, das Frontend kennzeichnet sie mit „Vom Absender gelöscht". Mit `web.hide_deleted_content = true` sind `text` und
+  `media` `null` und die Medien nicht abrufbar. Der Ingest erkennt Löschungen und Bearbeitungen über das Ereignis
+  `messages.update` der Bibliothek (lokal, ohne Anfrage an WhatsApp).
+- **`quoted`** (nur bei Antworten): `{ "id", "available", "sender", "fromMe", "type", "text", "deleted" }`. `available: true`:
+  die Originalnachricht ist noch gespeichert, die Angaben stammen von ihr (`text` höchstens 140 Zeichen). `available: false`:
+  das Original ist weg; `sender`, `type` und `text` stammen aus dem Kurzzitat, das der Ingest beim Speichern der Antwort
+  abgelegt hat (können fehlen). `fromMe` ist dann `null`.
+- **Dokumentname:** Dokumente liegen als `<Nachrichten-ID>__<Originalname>` auf der Platte; `media.fileName` und der
+  `Content-Disposition`-Header des Downloads nennen nur den Originalnamen.
 - Dateisystempfade werden nie ausgeliefert. Medien holt man immer über `api/media/<messageId>`.
+
+### `PUT api/chats/:id/mute` **[Version 2]**
+Body `{ "muted": true|false }`. Reine Anzeige-Einstellung (settings `chat.muted`, JSON-Liste, höchstens 1000 Einträge). `200 {"ok":true,"muted":boolean}`,
+`400 invalid_body`, `404 chat_not_found`, `409 too_many_muted_chats`.
 
 ### `POST api/chats/:id/seen`
 Body: **genau eines** von `{ "all": true }` oder `{ "upTo": "<messageId>" }`.
@@ -170,6 +194,17 @@ Betroffene Nachrichten kommen zusätzlich als `message_updated` per SSE (auch in
 
 ### `POST api/messages/:id/played`
 Kein Body nötig. `200 {"ok":true,"playedAt":number|null}`. Idempotent (der erste Zeitpunkt bleibt). `404 message_not_found`.
+
+### `GET api/messages/:id/versions` **[Version 2]**
+`200 { "id", "current": { "text", "editedAt" }, "versions": [ { "version": 1, "text", "replacedAt" }, … ] }`, älteste zuerst
+(`version` 1 = Original, `replacedAt` = Zeitpunkt der nächsten Bearbeitung). `404 message_not_found`, auch bei gelöschten Nachrichten,
+wenn `hide_deleted_content` an ist.
+
+### `POST api/messages/:id/protect` **[Version 2]**
+Body `{ "protected": true|false }` (Boolean, sonst `400 invalid_body`). Schild setzen oder entfernen.
+`200 { "ok": true, "protectedAt": number|null, "loading": boolean }`. `loading: true`: Die Nachricht hat ein ladbares Medium, und
+das Setzen des Schilds hat zugleich den Befehl „Medium laden" abgelegt. Geschützte Nachrichten (samt Medien und Versionen)
+löscht weder der Cleanup-Dienst noch `POST api/storage/clear` ohne `includeProtected: true`. Zugehöriges SSE: `message_updated`.
 
 ## Medien
 
@@ -184,6 +219,12 @@ Kein Body nötig. `200 {"ok":true,"playedAt":number|null}`. Idempotent (der erst
   Das Frontend richtet sich nach `message.media.status` und lädt nur bei `ready`.
 - `?thumb=1`: Vorschaubild (jpeg/png/webp) – nur wenn `media.hasThumbnail` true ist, sonst `404`.
 
+### `POST api/media/:messageId/load` **[Version 2]**
+„Medium jetzt laden". Der Web-Dienst spricht nie mit WhatsApp oder dem Medienhost: Er legt nur den Befehl `load_media` in die Tabelle
+`ingest_commands`; der Ingest holt genau dieses Medium (ein HTTPS-Abruf an den Medienhost, bis `max_mb_forced`) und meldet das
+Ergebnis über `media_ready`. `202 {"ok":true}`; ein schon wartender Befehl für dieselbe Nachricht wird nicht verdoppelt.
+`404 not_found` (unbekannt), `409 not_loadable` (`media.loadable` ist false).
+
 ## Suche
 
 ### `GET api/search?q=&chatId=&type=&from=&to=&onlyNew=&limit=`
@@ -193,7 +234,7 @@ Kein Body nötig. `200 {"ok":true,"playedAt":number|null}`. Idempotent (der erst
   (`AND`, `OR`, `NEAR`, `-`, `*`, `"`, `:` …) haben **keine** Sonderbedeutung; Sonderzeichen sind harmlos.
 - `chatId`, `type` (`text|image|voice|video|document|system`, sonst `400`), `from`/`to` (inklusive, Einheit wie `waTimestamp`), `onlyNew` (`1|true|0|false`).
 - Ohne `q` muss mindestens ein Filter gesetzt sein, sonst `400 {"error":"q_or_filter_required"}` (z. B. `?onlyNew=1` liefert alle neuen Nachrichten).
-- Nur Sonderzeichen in `q` → `200 []`. Gelöschte Nachrichten sind nicht auffindbar.
+- Nur Sonderzeichen in `q` → `200 []`. Gelöschte Nachrichten sind nur mit `hide_deleted_content = true` nicht auffindbar.
 
 ## Einstellungen & Speicher
 
@@ -218,6 +259,8 @@ Kein Body nötig. `200 {"ok":true,"playedAt":number|null}`. Idempotent (der erst
 ### `GET api/storage/usage`
 ```jsonc
 {
+  "protectedMessages": 0,      // [Version 2] Nachrichten mit Schild
+  "protectedMediaBytes": 0,    // Summe ihrer fertig geladenen Mediendateien
   "totalBytes": 123456,        // mediaBytes + dbBytes
   "mediaBytes": 120000,        // Summe media.size_bytes (nur status "ready", ohne Thumbnails)
   "dbBytes": 3456,             // Datenbankdatei inkl. WAL/SHM
@@ -230,12 +273,14 @@ Kein Body nötig. `200 {"ok":true,"playedAt":number|null}`. Idempotent (der erst
 ```
 
 ### `POST api/storage/clear`
-Body `{ "scope": "chat"|"media"|"all", "chatId"?: string, "confirm": true }` – **`confirm` muss exakt das Boolean `true` sein**
+Body `{ "scope": "chat"|"media"|"all", "chatId"?: string, "confirm": true, "includeProtected"?: true }` – **`confirm` muss exakt das Boolean `true` sein**
 (`"true"` oder `1` werden abgelehnt: `400 confirm_required`). Löscht **endgültig**; das Frontend muss vorher nachfragen.
+**Geschützte Nachrichten (Schild) bleiben stehen**, ausser `includeProtected` ist genau `true` (jedes andere Nicht-Boolean: `400 invalid_body`).
+Die Antwort nennt `keptProtected` (Zahl der verbliebenen geschützten Nachrichten).
 - `chat`: alle Nachrichten und Medien dieses Chats (`chatId` Pflicht, `404 chat_not_found`, `400 chat_id_required`).
 - `media`: alle Mediendateien; die Nachrichten bleiben, `media.status` wird `expired`.
 - `all`: alle Nachrichten und Medien.
-- `200 { "deletedMessages": n, "deletedMedia": n, "freedBytes": n }`, anschließend SSE `cleanup_done`. Der Avatar-Cache bleibt unberührt.
+- `200 { "deletedMessages": n, "deletedMedia": n, "freedBytes": n, "keptProtected": n }`, anschließend SSE `cleanup_done`. Der Avatar-Cache bleibt unberührt.
 - `409 clear_in_progress`, wenn gerade eine Löschung läuft.
 
 ## Live-Updates (Server-Sent Events)
@@ -250,8 +295,8 @@ Höchstens 16 gleichzeitige Verbindungen (`503 too_many_clients`).
 | `event:` | `data:` (JSON) |
 |---|---|
 | `new_message` | `{ "chatId": string, "message": Message }` – `Message` exakt wie in der REST-Antwort |
-| `message_updated` | `{ "messageId", "chatId", "seenAt": number\|null, "playedAt": number\|null, "deleted": boolean, "edited": boolean, "text": string\|null }` – **[Präzisierung]** immer der vollständige aktuelle Stand (Obermenge des Vertrags; `edited`/`text` ergänzt, damit Bearbeitungen sichtbar werden) |
-| `media_ready` | `{ "messageId", "chatId", "status", "thumbnailPath"?: "api/media/<id>?thumb=1", "filePath"?: "api/media/<id>" }` – **[Präzisierung]** statt Dateisystempfaden relative API-Pfade; `thumbnailPath` nur falls vorhanden, `filePath` nur bei `status: "ready"` |
+| `message_updated` | `{ "messageId", "chatId", "seenAt": number\|null, "playedAt": number\|null, "deleted": boolean, "deletedAt": number\|null, "edited": boolean, "editedAt": number\|null, "editCount": number, "protectedAt": number\|null, "text": string\|null }` – **[Präzisierung]** immer der vollständige aktuelle Stand (Obermenge des Vertrags; Bearbeitung, Löschung und Schild ergänzt) |
+| `media_ready` | `{ "messageId", "chatId", "status", "skipReason", "loadable", "thumbnailPath"?: "api/media/<id>?thumb=1", "filePath"?: "api/media/<id>" }` – **[Präzisierung]** statt Dateisystempfaden relative API-Pfade; `thumbnailPath` nur falls vorhanden, `filePath` nur bei `status: "ready"`; `skipReason`/`loadable` ändern sich auch ohne neue Datei (z. B. nach „Medium jetzt laden") |
 | `connection_status` | `{ "state": "connected"\|"connecting"\|"disconnected"\|"needs_qr", "since"?: number }` |
 | `history_synced` | `{ "stored": number }` – **[Ergänzung]** einmal je Verlaufspaket nach dem Koppeln; Chatliste neu laden (der Verlauf erzeugt keine einzelnen `new_message`) |
 | `cleanup_done` | `{ "deletedMessages": number, "deletedMedia": number }` – Chatliste und offene Ansicht neu laden |

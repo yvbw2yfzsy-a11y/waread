@@ -28,10 +28,10 @@ Das Skript ist wiederholbar: ein zweiter oder überlappender Lauf (z. B. stündl
 
 1. Einstellungen lesen: `retentionDays` (Default 3), `retentionMediaDays` (Default = `retentionDays`).
    Ungültiger Wert (nicht 1–3650) bricht ab, bevor etwas gelöscht wird.
-2. **Nachrichten** mit `wa_timestamp` älter als `retentionDays` löschen, in Stapeln zu 500: erst Medien-Dateien und Thumbnails, dann `media` und `messages` in **einer** Transaktion (`BEGIN IMMEDIATE`). Den Suchindex (`messages_fts`, `messages_fts_map`) räumen die Trigger aus `db/schema.sql` mit auf; der Cleanup löscht keine FTS-Zeilen von Hand.
+2. **Nachrichten** mit `wa_timestamp` älter als `retentionDays` löschen, **ausser geschützten** (`messages.protected_at`, das Schild; Version 2), in Stapeln zu 500: erst Medien-Dateien und Thumbnails, dann `media` und `messages` in **einer** Transaktion (`BEGIN IMMEDIATE`). Den Suchindex (`messages_fts`, `messages_fts_map`) räumen die Trigger aus `db/schema.sql` mit auf; der Cleanup löscht keine FTS-Zeilen von Hand.
    Maßgeblich ist der WhatsApp-Zeitstempel, nie `received_at`.
 3. **Nur Medien** früher ablaufen lassen, wenn `retentionMediaDays` < `retentionDays`: Datei weg, `media.status = 'expired'`, Pfade `NULL`; Nachricht und FTS-Eintrag bleiben.
-   Ist `retentionMediaDays` größer, überlebt das Medium seine Nachricht nicht (Schritt 2 gilt zuerst).
+   Ist `retentionMediaDays` größer, überlebt das Medium seine Nachricht nicht (Schritt 2 gilt zuerst). Medien geschützter Nachrichten laufen nicht ab; bei den übrigen setzt der Ablauf `loadable = 0` (nichts mehr zu laden).
 4. **Orphan-Sweep**: Dateien unter dem Media-Root ohne Verweis aus `media.file_path`, `media.thumbnail_path` oder `chats.avatar_path` löschen, danach leere Ordner.
    Nur was älter als 60 Minuten ist (der Ingest schreibt die Datei vor der DB-Zeile). `avatars/` und Symlinks werden nie angefasst.
 5. WAL-Checkpoint (`TRUNCATE`) ab 100 gelöschten Zeilen. Mit `--vacuum`: `VACUUM`, danach erneut Checkpoint.
@@ -64,7 +64,7 @@ Die Reihenfolge „Dateien zuerst, DB danach" macht jeden Abbruchpunkt heilbar, 
 Im Projektordner:
 
 ```
-npm test -w waread-cleanup            # node --import tsx --test cleanup.test.ts, 20 Tests, gegen das echte Schema aus db/
+npm test -w waread-cleanup            # node --import tsx --test cleanup.test.ts, 38 Tests, gegen das echte Schema aus db/
 npm run typecheck -w waread-cleanup
 ```
 

@@ -44,3 +44,17 @@ Für die Testinstanz mit Zweitnummer gibt es einen Zähler (`count_outgoing_node
 ## Optionen, die waread setzt
 
 `markOnlineOnConnect: false` (sonst typlose Receipts und `available`), `syncFullHistory: false`, `generateHighQualityLinkPreview: false`, `getMessage: async () => undefined`, `browser: Browsers.ubuntu('Chrome')`. Alle anderen Optionen stehen auf dem Standard der Bibliothek.
+
+## Version 2: was dazukommt (und was nicht)
+
+Stand: 29. Oktober 2026. Keine der Änderungen sendet einen neuen Knoten über den WebSocket. Gesichert ist das nur für den **eigenen** Code (der Wächter `check:no-send` ist unverändert grün, die Hülle `waLib.ts` reicht weiter nur `ev.on`, `ev.off` und `end` durch). Was die Bibliothek selbst sendet, bleibt wie oben beschrieben.
+
+| Funktion | Verkehr | Beleg |
+| --- | --- | --- |
+| `messages.update` (gelöscht, bearbeitet) | **keiner zusätzlich.** Die Bibliothek erzeugt das Ereignis lokal, wenn sie die Löschung oder Bearbeitung als ohnehin zugestellte Nachricht verarbeitet. Die Quittung je empfangener Fremdnachricht (siehe oben) geht auch ohne waread-Code raus. | `node_modules/baileys/lib/Utils/process-message.js:298-305` (REVOKE), `:364-372` (MESSAGE_EDIT), gelesen, nicht ausgeführt |
+| Zitat-Kurztext, `@Name`, Versionen, Schild, Stumm, Formatierung | keiner. Es sind Felder der ohnehin empfangenen Nachricht und lokale Zustände. | Quelltext |
+| Einmal-Probe (`viewonce_probe`, Stufe 1) | keiner (nur Journalzeile mit Ja/Nein-Werten). | Quelltext, Test `v2.test.ts` |
+| **„Medium jetzt laden“** | **ein HTTPS-Abruf an den Medienhost je Medium**, ausgelöst vom Ingest auf Befehl des Web-Dienstes (der Web-Dienst selbst bleibt ohne ausgehenden Verkehr). Auch das Setzen des Schilds an einer Nachricht mit ladbarem Medium löst einen aus. Kein WebSocket-Knoten (wie jeder Medien-Download); `downloadContentFromMessage` ist nicht auf versteckte Sendeaufrufe geprüft. Ein abgelaufener Link endet mit HTTP 403/404/410 und wird als „bei WhatsApp nicht mehr verfügbar“ vermerkt. Die „Neu-Upload-Anfrage“ an das Telefon wird weiter nie gestellt. | `services/ingest/src/mediaQueue.ts` (`loadDeferred`) |
+| **Einmal-Medien speichern** (`store_view_once = true`, Standard aus) | ein HTTPS-Abruf je Einmal-Medium **bei Ankunft**, wie beim Auto-Download. Ob dem Absender dabei etwas angezeigt wird: UNBEKANNT. | `services/ingest/src/messageHandler.ts` |
+
+Für Einmal-Medien ohne Zweitnummer: Stufe 1 (nur lesen, kein Verkehr) zuerst auswerten (`docs/VERSION2.md`, Abschnitt 3), bevor der Schalter eingeschaltet wird. Mit der Testinstanz und dem Knotenzähler (`count_outgoing_nodes`) lässt sich zusätzlich messen, ob dabei etwas anderes als der HTTPS-Abruf ausgesendet wird.

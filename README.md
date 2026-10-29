@@ -2,6 +2,8 @@
 
 waread ist eine **rein lesende** Web-Oberfläche für die eigenen WhatsApp-Nachrichten, gedacht für einen Raspberry Pi im Heimnetz. Der Pi verbindet sich als „verknüpftes Gerät“ (Node.js, TypeScript, Baileys), speichert Nachrichten und Medien für wenige Tage in SQLite und zeigt sie im Browser an. Das Programm sendet nichts an WhatsApp zurück: keine Nachricht, keine Lesebestätigung, kein bewusst gesetzter Online-Status. Dass das so bleibt, sichert ein automatischer Test im Code. Was die Bibliothek intern selbst sendet, kann nur der Zweitnummer-Test zeigen (`docs/SECURITY_TESTS.md`).
 
+**Version 2 (Branch `claude/waread-design-features-5qn19p`)** ergänzt: Schild (Nachrichten vor dem Löschen schützen), „Vom Absender gelöscht“ und Bearbeitungsverlauf, Zitate mit Text, „Medium jetzt laden“, Sichern auf dem Gerät, Einmal-Medien (Schalter, Standard aus), stumme Chats, Korrekturen am Layout. Was zu tun ist und was ungeprüft bleibt: `docs/VERSION2.md`.
+
 Stand: Version 0.1.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
 
 ## Aufbau
@@ -21,7 +23,7 @@ Stand: Version 0.1.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohn
 Im Projektordner, mit Node.js ≥ 22.12:
 
 ```bash
-npm install                 # beim ersten Mal; erzeugt package-lock.json (liegt nicht bei)
+npm ci                      # package-lock.json liegt bei (npm install, wenn du Abhängigkeiten ändern willst)
 npm run build               # db, ingest (mit Sende-Wächter), web, frontend, cleanup
 npm test                    # alle Testläufe
 npm run check:no-send       # nur der Sende-Wächter
@@ -37,6 +39,7 @@ Installation auf dem Pi, Konfiguration, Kopplung und die Prüfungen vor dem Haup
 | `docs/MAINTENANCE.md` | Betrieb: Logs, Speicher, Updates, Verbindungsabbruch, Notfälle |
 | `docs/SECURITY_TESTS.md` | Lesebestätigungs-Gate, Zweitnummer-Test, Sicherheits-Baseline |
 | `docs/TEST_CHECKLIST.md` | Was die automatisierten Tests belegen müssen; Sabotage-Proben |
+| `docs/VERSION2.md` | Version 2: was neu ist, Einspielen auf dem Pi, Einmal-Medien, Schild und Aufbewahrung, zusätzlicher Verkehr, Ungeprüftes |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
 | `services/*/README.md`, `cleanup/README.md`, `db/README.md` | Verhalten und Grenzen je Baustein |

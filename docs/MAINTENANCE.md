@@ -117,7 +117,7 @@ Zielwerte laut Vorgabe: jeder waread-Dienst im Leerlauf unter etwa 150–250 MB.
 
 ### 4.4 Speicher leeren
 
-In waread: *Einstellungen → Speicher leeren* (Medien eines Chats, alle Medien, alle Nachrichten eines Chats oder alles; jeweils zweistufig bestätigt). Gelöscht wird nur lokal; auf dem iPhone bleibt alles. Neue Nachrichten werden danach weiter gespeichert. Der Umfang **Alles** beauftragt zusätzlich den Ingest, seine gemerkten Anzeigenamen und die Zuordnung Kennung ↔ Telefonnummer zu leeren (F14); der Auftrag bleibt stehen, bis der Ingest läuft. Die Umfänge **Chat** und **Medien** lassen diese Daten bewusst unberührt. Auch die Medienaufgaben des Ingest (mit den Schlüsseln noch nicht geladener Medien) gehören nicht zu diesem Auftrag; sie verschwinden, sobald sie abgearbeitet oder abgelaufen sind.
+In waread: *Einstellungen → Speicher leeren* (Medien, ein Chat oder alles; jeweils zweistufig bestätigt). Es gibt **zwei Wege**: „Speicher leeren (ohne geschützte)“ lässt Nachrichten mit Schild samt Medien stehen; „Speicher leeren (auch geschützte)“ ist der einzige Weg, sie zu löschen (eigenes Bestätigungswort `GESCHÜTZTE LÖSCHEN`, nennt Zahl und Größe, kein Backup). Der automatische Cleanup löscht geschützte Nachrichten nie. Siehe `docs/VERSION2.md`, Abschnitt 4. Gelöscht wird nur lokal; auf dem iPhone bleibt alles. Neue Nachrichten werden danach weiter gespeichert. Der Umfang **Alles** beauftragt zusätzlich den Ingest, seine gemerkten Anzeigenamen und die Zuordnung Kennung ↔ Telefonnummer zu leeren (F14); der Auftrag bleibt stehen, bis der Ingest läuft. Die Umfänge **Chat** und **Medien** lassen diese Daten bewusst unberührt. Auch die Medienaufgaben des Ingest (mit den Schlüsseln noch nicht geladener Medien) gehören nicht zu diesem Auftrag; sie verschwinden, sobald sie abgearbeitet oder abgelaufen sind.
 
 **Ehrliche Grenze:** `secure_delete` überschreibt gelöschte Inhalte in der Datenbankdatei. Auf SD-Karte oder SSD kann der Datenträger selbst Reste behalten. Wer das ausschließen will, legt das Datenverzeichnis auf ein verschlüsseltes Dateisystem (LUKS).
 
@@ -223,6 +223,8 @@ systemctl is-active waread-ingest waread-web
 ```
 
 Danach: Status „verbunden“, Text vom Zweitgerät kommt an. Wechselt dabei die Bibliotheksversion, gehört der Zweitnummer-Test dazu.
+
+**Version 2 → Version 1:** Der alte Cleanup-Dienst kennt das Schild nicht und löscht geschützte Nachrichten (Ingest und Web der alten Fassung verweigern eine Version-2-Datenbank, der alte Cleanup prüft das nicht). Vor dem Rücksprung `sudo systemctl stop waread-cleanup.timer waread-cleanup-vacuum.timer` und die Datenbank sichern (`docs/VERSION2.md`, Abschnitt 2).
 
 Wichtige Fallen (Details in INSTALL.md): **Datenbankschema** der neueren Version kann mit der alten nicht kompatibel sein (Notausgang: nur die Datenbank verwerfen, **`auth/` behalten**); **Sitzungsformat** kann nach einem Wechsel der Bibliotheks-Hauptversion neues Koppeln erfordern; die **alte Version muss noch unter `releases/` liegen**. Lösche alte Versionen daher nicht sofort.
 

@@ -248,3 +248,18 @@ Ergebnis dokumentieren: Nummer, erwartete Rotstellen, tatsächlich rot geworden 
 | H Web-Backend | | | | | | |
 
 Datum der Prüfung: ________________ Geprüft von: ________________ Version: ________________
+
+## Version 2: Prüfungen von Hand auf dem iPhone und dem Pi (nicht automatisierbar)
+
+Diese Punkte sind in der Entwicklungsumgebung **nicht** geprüft (kein Safari, kein iPhone, kein WhatsApp-Konto):
+
+- [ ] Oberste Zeile (Kopfzeile) wird in Safari und als Startbildschirm-App nicht von der Dynamic Island verdeckt; im Querformat nicht von der Aussparung.
+- [ ] „Auf dem Gerät sichern“: Foto → Teilen-Blatt → „Bild sichern“; Sprachnachricht und Dokument → „In Dateien sichern“. Ohne HTTPS fällt waread auf den Download-Link zurück: Verhalten prüfen.
+- [ ] Sprachnachricht: Geschwindigkeitstaste rechts neben der Audiospur, 1×/1,5×/2× schaltet um, Audiospur lässt sich bedienen.
+- [ ] Ein Kontakt löscht eine Nachricht „für alle“: Sie bleibt, trägt „Vom Absender gelöscht“, der Text ist lesbar (`hide_deleted_content = false`).
+- [ ] Ein Kontakt bearbeitet eine Nachricht: „bearbeitet“ erscheint, der Verlauf zeigt Original und Fassungen.
+- [ ] Antwort auf eine Nachricht: Zitat mit Text und Absender; Antwort auf eine ältere, schon gelöschte Nachricht: Kurzzitat.
+- [ ] Video bei Regel „Aus“: Platzhalter mit Größe und Grund, „Jetzt laden“ lädt (`journalctl -u waread-ingest -o cat | grep command_load_media`), danach spielt es ab.
+- [ ] Schild: Nachricht schützen, `sudo systemctl start waread-cleanup.service`, Nachricht bleibt; in den Einstellungen beide Löschwege durchgehen.
+- [ ] Einmal-Foto und Einmal-Sprachnachricht von einem Kontakt schicken lassen: `journalctl -u waread-ingest -o cat | grep viewonce_probe` auswerten, **bevor** `store_view_once` eingeschaltet wird.
+- [ ] Zweitnummer-Test (`docs/SECURITY_TESTS.md`) erneut, mit eingeschaltetem Knotenzähler: keine neuen Knotenarten gegenüber Version 1.

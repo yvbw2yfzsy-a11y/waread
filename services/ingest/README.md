@@ -137,6 +137,15 @@ Der gemeinsame Vertrag legt Tabellen fest, nicht die Schlüssel- und Ereignisnam
 
 `settings`, **Ingest schreibt:** `connection.status`, `connection.qr` (leer, wenn keiner aktiv), `connection.qr_seq`, `connection.reason`, `connection.updated_at`, `connection.connected_since`.
 **Ingest liest:** `retentionDays` und `retentionMediaDays` (ganze Tage 1–365, 30 s Zwischenspeicher; sonst Wert aus `[retention]` in `config.toml`; geschrieben vom Web-Dienst über `PUT /api/settings`) und `downloadRules` (JSON `{image|voice|video|document: {mode: 'auto'|'off', maxMb}}`, 15 s Zwischenspeicher; fehlt oder ist ein Eintrag ungültig, gelten die Werte `auto_download_*` und `max_mb_*` aus `config.toml`; siehe `src/downloadPolicy.ts`).
+**Version 2:** Der Ingest hört zusätzlich auf `messages.update` (Empfangsereignis, lokal aus ohnehin empfangenen Nachrichten erzeugt):
+`REVOKE` setzt `deleted`/`deleted_at`, `MESSAGE_EDIT` legt die alte Fassung in `message_versions` ab und setzt den neuen Text (`applyMessageEdit`).
+Das Kurzzitat (`contextInfo.quotedMessage`) und `@Nummer` → `@Name` (`mentionedJid`) werden beim Speichern aufgelöst. Einmal-Medien: Journalzeile
+`viewonce_probe` (nur Ja/Nein), Speichern nur mit `store_view_once = true`. Nicht geladene Medien (Regel „Aus“, zu groß, Verlauf, Netzfehler) behalten ihre
+Schlüssel im privaten Speicher (`deferred_media`), `media.skip_reason`/`loadable` sagen der Oberfläche warum und ob „Jetzt laden“ geht. Die Tabelle
+`ingest_commands` ist der Befehlskanal des Web-Dienstes (`load_media`); der Ingest fragt sie im selben Takt wie `connection.command` ab (`src/commands.ts`)
+und räumt alle 10 Minuten zurückgestellte Schlüssel auf (Nachricht weg oder Medien-Aufbewahrung abgelaufen, geschützte Nachrichten ausgenommen).
+`max_mb_forced` (Standard 500) begrenzt ein ausdrücklich angefordertes Medium. Zusätzlicher Verkehr: nur der HTTPS-Abruf je „Jetzt laden“ und je Einmal-Medium bei
+`store_view_once`; siehe `docs/VERSION2.md`, Abschnitt 5.
 **Steuerkanal:** Der Web-Dienst schreibt `connection.command = 'connect'` (`POST /api/connect`); der Ingest prüft alle 3 s, quittiert durch Leeren des Werts, ignoriert den Befehl bei laufendem Socket und unbekannte Befehle. Nach einer Abmeldung oder einem abgelaufenen QR wartet der Dienst im Status `needs_qr` ohne QR auf diesen Befehl. Der Dienst meldet nie von sich aus ab.
 
 `events_outbox` (alle Zeitstempel Unix-**Sekunden**; der Web-Dienst liest die Tabelle und leitet die Ereignisse als SSE weiter, Cleanup und Web schreiben eigene Ereignisse `cleanup_done` bzw. `message_updated`):

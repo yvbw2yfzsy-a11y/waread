@@ -6,10 +6,10 @@ ausschliesslich über `client.ts` auf die Datenbank zu.
 
 | Datei | Inhalt |
 |---|---|
-| `schema.sql` | Vollständiges Schema (Version 1) inkl. Indizes und FTS-Trigger |
+| `schema.sql` | Vollständiges Schema (Version 1) inkl. Indizes und FTS-Trigger. Version 2 steht als Migration in `migrate.ts` (nur `ADD COLUMN` und neue Tabellen) |
 | `migrate.ts` | `runMigrations()`, `user_version`-basiert, idempotent, sicher bei parallelem Start |
 | `client.ts` | Alle Funktionen des Vertrags plus drei benannte Erweiterungen (siehe unten) |
-| `client.test.ts` | 24 Tests (`node:test`) |
+| `client.test.ts` | 34 Tests (`node:test`) |
 | `package.json`, `tsconfig*.json` | Eigenständig testbar / baubar |
 
 ## Setup
@@ -18,7 +18,7 @@ ausschliesslich über `client.ts` auf die Datenbank zu.
 
 ```bash
 npm install                    # better-sqlite3 ist ein natives Modul
-npm test -w @waread/db         # tsx --test client.test.ts, 24 Tests
+npm test -w @waread/db         # tsx --test client.test.ts, 34 Tests
 npm run typecheck -w @waread/db
 npm run build -w @waread/db    # nach db/dist/ (client.js, migrate.js, Typen)
 ```
@@ -128,7 +128,7 @@ Der Index kostet zusätzlichen Speicher und Schreibaufwand auf dem Pi.
 
 ## Teststatus (ehrlich)
 
-- Die 24 Tests laufen grün, **aber nicht gegen echtes better-sqlite3**: die npm-Registry war in der
+- Die 34 Tests laufen grün (inzwischen mit dem echten `better-sqlite3`; der folgende Absatz beschreibt den Stand beim Erstellen), **aber nicht gegen echtes better-sqlite3**: die npm-Registry war in der
   Entwicklungsumgebung gesperrt. Stattdessen lief der Code gegen ein lokales Ersatzpaket `better-sqlite3` (`0.0.0-test-shim`, nur Testwerkzeug, nicht Teil des Projekts), das die
   genutzte better-sqlite3-API auf Node `node:sqlite` abbildet (echtes SQLite 3.53.4 mit FTS5). SQL, Trigger,
   Transaktionslogik und Suche sind damit real geprüft. **Nicht geprüft** sind Eigenheiten der echten
@@ -136,3 +136,15 @@ Der Index kostet zusätzlichen Speicher und Schreibaufwand auf dem Pi.
 - Der Typecheck lief gegen die Typen des lokalen Ersatzpakets in der Bauumgebung, nicht gegen die echten `@types/better-sqlite3`.
 - Gegenprobe: Jeder der sechs Trigger wurde testweise entfernt; jeweils schlägt mindestens ein Test fehl.
 - Nicht getestet: parallele Schreibzugriffe mehrerer Prozesse unter Last, Verhalten auf dem Pi (SD-Karte, Speicher).
+
+## Version 2 (Migration `migrate.ts`)
+
+`user_version` 2. Neu: `messages.protected_at` (Schild), `view_once`, `edited_at`, `deleted_at`, `reply_text`/`reply_sender`/`reply_type` (Kurzzitat);
+`media.skip_reason` (CHECK: `rule_off`, `too_large`, `history`, `queue_full`, `retention`, `failed`, `link_expired`) und `media.loadable`;
+Tabelle `message_versions` (frühere Fassungen, `ON DELETE CASCADE`) und `ingest_commands` (Befehle Web → Ingest, z. B. `load_media`).
+
+Neue Funktionen in `client.ts`: `applyMessageEdit` (legt die alte Fassung ab), `listMessageVersions`, `markMessageDeleted` (setzt `deleted_at`),
+`setMessageProtected`, `countProtected`, `enqueueCommand`/`listCommands`/`deleteCommand`; `setMediaStatus` kennt `skipReason` und `loadable`;
+`insertMessageIfNotExists` nimmt `viewOnce` und das Kurzzitat. **`deleteExpired` lässt geschützte Nachrichten samt Medien stehen**, ausser
+`includeProtected` ist genau `true`. Jeder Dienst migriert beim Start selbst, der Cleanup-Dienst nie (er prüft die Spalten und läuft auf einer
+noch nicht migrierten Datenbank wie bisher).

@@ -288,6 +288,8 @@ Alle Schlüssel sind in der Datei kommentiert. **Ersetzen musst du:**
   Die Ausgabe (eine Zeile, beginnt mit `$argon2id$`) kommt in Anführungszeichen hinter `password_hash = `. Trage **nie ein Klartext-Passwort** ein. Alternativ `password_hash_file` mit dem Pfad einer Datei (Rechte 0640 root:waread), die den Hash enthält.
 - **Port** (`[web] port`). Annahme dieses Pakets: **8780**. Der Wert ist eine Festlegung, keine Vorgabe: Ist der Port auf deinem Pi belegt (Abschnitt 1), wähle einen anderen und ändere ihn **an drei Stellen**: `[web] port`, `update_health_url` in `[update]` und alle Vorkommen von `127.0.0.1:8780` in `/etc/nginx/snippets/waread.conf`. Der Dienst lauscht immer nur auf `127.0.0.1`.
 
+**Ab Version 2 (`docs/VERSION2.md`):** Eine vorhandene `config.toml` behält `hide_deleted_content = true` aus der Erstinstallation. Soll der Text „für alle gelöscht“ markierter Nachrichten sichtbar bleiben, auf `false` stellen. `store_view_once` (Einmal-Medien speichern) bleibt aus, bis das Journal mit `viewonce_probe` gezeigt hat, dass WhatsApp den Schlüssel liefert.
+
 **Prüfen, nicht ändern, solange du nichts Besonderes vorhast:**
 
 - `[web] cookie_path = "/waread/"` muss zum Nginx-Pfad passen (`/waread/`).
