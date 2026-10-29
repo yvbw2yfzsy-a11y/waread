@@ -1,5 +1,8 @@
 // Voice-note player: bar waveform, seek by tap/drag, speed 1x / 1.5x / 2x.
 //
+// Layout (phone width): [mic] [play] [waveform, time below] [speed]. The speed button sits right of the waveform with a
+// small gap, so the waveform is shorter (BARS) and the button is at least 44 px wide.
+//
 // The audio element is created lazily on first interaction (preload "none"
 // semantics) so a chat full of voice notes does not make the Pi serve every
 // file on open. Safari requires Range support on /api/media/:id; that is a
@@ -17,7 +20,7 @@ import { icon } from './icons';
 
 const SPEEDS = [1, 1.5, 2] as const;
 type Speed = (typeof SPEEDS)[number];
-const BARS = 42;
+const BARS = 30;
 
 let current: HTMLAudioElement | null = null;
 
@@ -86,7 +89,8 @@ export function audioPlayer(m: Message, track: (cleanup: () => void) => void): H
   const root = el('div', { class: 'voice' },
     el('div', { class: 'voice-lead' }, icon('mic', 18), dot),
     playBtn,
-    el('div', { class: 'voice-main' }, wave, el('div', { class: 'voice-foot' }, timeLbl, speedBtn)));
+    el('div', { class: 'voice-main' }, wave, el('div', { class: 'voice-foot' }, timeLbl)),
+    speedBtn);
 
   const durationOf = (a: HTMLAudioElement | null): number =>
     a && Number.isFinite(a.duration) && a.duration > 0 ? a.duration : total ?? 0;

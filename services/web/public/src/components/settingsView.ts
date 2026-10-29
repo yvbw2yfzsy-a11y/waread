@@ -1,5 +1,5 @@
 // Settings: retention, storage limit, download rules, storage overview and the
-// two-step "clear storage" flow, plus local display preferences.
+// two-step "clear storage" flow (two ways: without and including protected messages), plus local display preferences.
 //
 // Retention changes are saved with an explicit button and a visible warning,
 // because shortening them lets the next cleanup run delete older messages.
@@ -39,8 +39,9 @@ function select<T extends string | number>(
   return sel;
 }
 
-function row(label: string, control: Node, hint?: string): HTMLElement {
-  return el('div', { class: 'form-row' },
+/** `stack`: label above the controls (needed where two selects share a row, so neither is cut off on a phone). */
+function row(label: string, control: Node, hint?: string, stack = false): HTMLElement {
+  return el('div', { class: `form-row${stack ? ' stack' : ''}` },
     el('div', { class: 'form-label' }, el('span', null, label), hint ? el('small', null, hint) : null), control);
 }
 
@@ -50,7 +51,8 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
   let usage: StorageUsage | null = null;
   let clearScope: ClearScope = 'media';
   let clearChatId = '';
-  let confirming = false;
+  /** null = nothing started; 'normal' = without protected messages; 'extreme' = including them. */
+  let confirming: 'normal' | 'extreme' | null = null;
 
   const passkeyCard = createPasskeyCard(); // keeps its own state; the node is re-attached on every render()
   const body = el('div', { class: 'scroll pad' });
@@ -77,7 +79,8 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
     return el('section', { class: 'card' },
       el('h2', null, 'Anzeige'),
       el('label', { class: 'switch-row' }, box, el('span', null, 'Beim Öffnen eines Chats alles als gesehen markieren')),
-      el('p', { class: 'muted small' }, 'Ohne diese Option gilt eine Nachricht erst nach etwa einer Sekunde im sichtbaren Bereich als gesehen. Gesehen ist nur eine lokale Markierung und ändert nichts in WhatsApp.'));
+      el('p', { class: 'muted small' }, 'Ohne diese Option gilt eine Nachricht erst nach etwa einer Sekunde im sichtbaren Bereich als gesehen. Gesehen ist nur eine lokale Markierung und ändert nichts in WhatsApp.'),
+      el('p', { class: 'muted small' }, 'Tipp: Auf eine Nachricht tippen öffnet ihr Menü: mit Schild schützen, auf dem Gerät sichern, Medium jetzt laden, Bearbeitungen ansehen.'));
   };
 
   const retentionCard = (): HTMLElement => {
@@ -107,7 +110,7 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
       sel.addEventListener('change', () => { d.downloadRules[k.id] = sel.value as DownloadMode; render(); });
       const max = select(FILE_MAX_CHOICES_MB, d.downloadMaxMb[k.id], (v) => `≤ ${mbLabel(v)}`, (v) => { d.downloadMaxMb[k.id] = Number(v); render(); }, `Größenlimit ${k.label}`);
       max.disabled = cur === 'off';
-      return row(k.label, el('div', { class: 'inline-controls' }, sel, max));
+      return row(k.label, el('div', { class: 'inline-controls' }, sel, max), undefined, true);
     });
 
     return el('section', { class: 'card' },
@@ -139,6 +142,10 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
     append(card, [
       el('p', null, el('strong', null, formatBytes(usage.totalBytes)), limitMb ? ` von ${mbLabel(limitMb)}` : ''),
       limitBytes ? meter(usage.totalBytes / limitBytes, true) : null,
+      usage.protectedMessages > 0
+        ? el('p', { class: 'muted small protected-line' }, icon('shieldCheck', 14),
+          `Mit Schild geschützt: ${usage.protectedMessages} ${usage.protectedMessages === 1 ? 'Nachricht' : 'Nachrichten'}, Dateien ${formatBytes(usage.protectedMediaBytes)}. Das Schild ist kein Backup: Fällt die Speicherkarte aus, sind auch geschützte Nachrichten weg.`)
+        : null,
     ]);
     const maxType = Math.max(1, ...usage.perType.map((t) => t.bytes));
     if (usage.perType.length) {
@@ -155,11 +162,31 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
     return card;
   };
 
-  const scopeText = (): string => {
-    if (clearScope === 'media') return 'alle gespeicherten Medien (Fotos, Sprachnachrichten, Videos, Dokumente)';
-    if (clearScope === 'all') return 'ALLE gespeicherten Nachrichten und Medien sowie die gemerkten Namen und Nummernzuordnungen';
+  /** What the chosen scope deletes, in words; `extreme` adds the protected messages. */
+  const scopeText = (extreme: boolean): string => {
+    const prot = usage ? `${usage.protectedMessages} ${usage.protectedMessages === 1 ? 'geschützte Nachricht' : 'geschützte Nachrichten'}` : 'geschützte Nachrichten';
+    if (clearScope === 'media') {
+      return extreme
+        ? `alle gespeicherten Medien (Fotos, Sprachnachrichten, Videos, Dokumente), auch die Dateien von ${prot}`
+        : 'alle gespeicherten Medien (Fotos, Sprachnachrichten, Videos, Dokumente) außer denen geschützter Nachrichten';
+    }
+    if (clearScope === 'all') {
+      return extreme
+        ? `ALLE gespeicherten Nachrichten und Medien, auch ${prot}, sowie die gemerkten Namen und Nummernzuordnungen`
+        : 'alle gespeicherten Nachrichten und Medien außer den geschützten, sowie die gemerkten Namen und Nummernzuordnungen';
+    }
     const name = state.chats.get(clearChatId)?.name ?? 'den gewählten Chat';
-    return `alle gespeicherten Nachrichten und Medien von „${name}“`;
+    return extreme
+      ? `alle gespeicherten Nachrichten und Medien von „${name}“, auch die mit Schild`
+      : `alle gespeicherten Nachrichten und Medien von „${name}“ außer den geschützten`;
+  };
+
+  const keptText = (): string => {
+    if (!usage || usage.protectedMessages === 0) return '';
+    const n = usage.protectedMessages;
+    return clearScope === 'chat'
+      ? 'Geschützte Nachrichten dieses Chats bleiben erhalten.'
+      : `${n} ${n === 1 ? 'geschützte Nachricht bleibt' : 'geschützte Nachrichten bleiben'} erhalten.`;
   };
 
   const clearCard = (): HTMLElement => {
@@ -167,7 +194,7 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
       el('option', { value: 'media', selected: clearScope === 'media' }, 'Nur Medien'),
       el('option', { value: 'chat', selected: clearScope === 'chat' }, 'Einen Chat'),
       el('option', { value: 'all', selected: clearScope === 'all' }, 'Alles'));
-    scopeSel.addEventListener('change', () => { clearScope = scopeSel.value as ClearScope; confirming = false; render(); });
+    scopeSel.addEventListener('change', () => { clearScope = scopeSel.value as ClearScope; confirming = null; render(); });
 
     const card = el('section', { class: 'card danger-zone' }, el('h2', null, 'Speicher leeren'), row('Umfang', scopeSel));
 
@@ -176,30 +203,41 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
       if (!clearChatId && chats[0]) clearChatId = chats[0].id;
       const chatSel = el('select', { class: 'field', 'aria-label': 'Chat wählen' },
         ...chats.map((c) => el('option', { value: c.id, selected: c.id === clearChatId }, c.name)));
-      chatSel.addEventListener('change', () => { clearChatId = chatSel.value; confirming = false; render(); });
+      chatSel.addEventListener('change', () => { clearChatId = chatSel.value; confirming = null; render(); });
       card.append(row('Chat', chatSel));
     }
 
-    if (!confirming) {
-      const start = el('button', { class: 'btn danger', type: 'button', disabled: clearScope === 'chat' && !clearChatId }, icon('trash', 16), 'Leeren …');
-      start.addEventListener('click', () => { confirming = true; render(); });
-      card.append(el('div', { class: 'actions' }, start));
+    if (confirming === null) {
+      const disabled = clearScope === 'chat' && !clearChatId;
+      const normal = el('button', { class: 'btn danger', type: 'button', disabled }, icon('trash', 16), 'Speicher leeren (ohne geschützte)');
+      normal.addEventListener('click', () => { confirming = 'normal'; render(); });
+      const extreme = el('button', { class: 'btn danger extreme', type: 'button', disabled }, icon('trash', 16), 'Speicher leeren (auch geschützte)');
+      extreme.addEventListener('click', () => { confirming = 'extreme'; render(); });
+      card.append(
+        el('p', { class: 'muted small' }, 'Geschützte Nachrichten (mit Schild) löscht weder die automatische Aufbewahrung noch die erste Variante. Nur die zweite entfernt auch sie.'),
+        el('div', { class: 'actions vertical' }, normal, extreme));
       return card;
     }
 
-    // Step 2: explicit confirmation by typing a word.
-    const word = el('input', { class: 'field', type: 'text', placeholder: 'LÖSCHEN eingeben', autocomplete: 'off', autocapitalize: 'characters', 'aria-label': 'Bestätigung' });
-    const go = el('button', { class: 'btn danger', type: 'button', disabled: true }, 'Endgültig löschen');
+    const extreme = confirming === 'extreme';
+    // Step 2: explicit confirmation by typing a word. The extreme way needs a different word, so it cannot be
+    // confirmed by habit.
+    const WORD = extreme ? 'GESCHÜTZTE LÖSCHEN' : 'LÖSCHEN';
+    const word = el('input', { class: 'field', type: 'text', placeholder: `${WORD} eingeben`, autocomplete: 'off', autocapitalize: 'characters', 'aria-label': 'Bestätigung' });
+    const go = el('button', { class: `btn danger${extreme ? ' extreme' : ''}`, type: 'button', disabled: true }, extreme ? 'Endgültig löschen, auch geschützte' : 'Endgültig löschen');
     const cancel = el('button', { class: 'btn', type: 'button' }, 'Abbrechen');
-    word.addEventListener('input', () => { go.disabled = word.value.trim().toLocaleUpperCase('de-DE') !== 'LÖSCHEN'; });
-    cancel.addEventListener('click', () => { confirming = false; render(); });
+    const normalize = (v: string): string => v.trim().replace(/\s+/g, ' ').toLocaleUpperCase('de-DE');
+    word.addEventListener('input', () => { go.disabled = normalize(word.value) !== WORD; });
+    cancel.addEventListener('click', () => { confirming = null; render(); });
     go.addEventListener('click', () => {
       go.disabled = true;
       const chatId = clearScope === 'chat' ? clearChatId : undefined;
-      api.storageClear(clearScope, chatId).then(
-        async () => {
-          confirming = false;
-          toast('Speicher geleert.');
+      api.storageClear(clearScope, chatId, extreme).then(
+        async (res) => {
+          confirming = null;
+          toast(res.keptProtected > 0
+            ? `Speicher geleert. ${res.keptProtected} geschützte ${res.keptProtected === 1 ? 'Nachricht bleibt' : 'Nachrichten bleiben'} erhalten.`
+            : 'Speicher geleert.');
           dataChanged();
           await Promise.allSettled([loadChats(), loadUsage()]);
           if (!destroyed) render();
@@ -207,8 +245,12 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
         () => { toast('Leeren fehlgeschlagen.'); go.disabled = false; },
       );
     });
-    card.append(el('div', { class: 'confirm-panel' },
-      el('p', null, `Das löscht ${scopeText()} endgültig aus dem waread-Speicher. Es lässt sich nicht rückgängig machen. WhatsApp selbst ist nicht betroffen.`),
+    card.append(el('div', { class: `confirm-panel${extreme ? ' confirm-extreme' : ''}` },
+      extreme ? el('p', { class: 'extreme-label' }, icon('info', 16), el('strong', null, 'Extremer Schritt: löscht auch Nachrichten mit Schild')) : null,
+      el('p', null, `Das löscht ${scopeText(extreme)} endgültig aus dem waread-Speicher. Es lässt sich nicht rückgängig machen${extreme ? ', und es gibt kein Backup' : ''}. WhatsApp selbst ist nicht betroffen.`),
+      !extreme && keptText() ? el('p', { class: 'muted small' }, keptText()) : null,
+      el('p', { class: 'small' }, 'Zum Bestätigen eingeben: ', el('strong', null, WORD)),
+      extreme && usage ? el('p', { class: 'muted small' }, `Geschützt sind zurzeit ${usage.protectedMessages} ${usage.protectedMessages === 1 ? 'Nachricht' : 'Nachrichten'} (Dateien: ${formatBytes(usage.protectedMediaBytes)}).`) : null,
       word, el('div', { class: 'actions' }, cancel, go)));
     return card;
   };
@@ -231,7 +273,7 @@ export function mountSettingsView(host: HTMLElement, onLogout: () => void): () =
   }
 
   async function loadUsage(): Promise<void> {
-    try { usage = await api.storageUsage(); } catch { usage = { totalBytes: 0, perChat: [], perType: [] }; toast('Speicherübersicht konnte nicht geladen werden.'); }
+    try { usage = await api.storageUsage(); } catch { usage = { totalBytes: 0, protectedMessages: 0, protectedMediaBytes: 0, perChat: [], perType: [] }; toast('Speicherübersicht konnte nicht geladen werden.'); }
     render();
   }
 

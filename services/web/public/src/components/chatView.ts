@@ -1,10 +1,10 @@
-// One open chat: header, message list with date separators, yellow
-// "N neue Nachrichten" divider, seen tracking, paging of older messages,
-// jump-to-message with highlight, and the read-only footer bar.
+// One open chat: header (back, avatar, name, mute), a slim bar with "N neue Nachrichten / Alle als gesehen" (only while
+// something is unseen, so it never covers messages), message list with date separators, yellow "N neue Nachrichten"
+// divider, seen tracking, paging of older messages, jump-to-message with highlight, and the read-only footer bar.
 
 import { goBack } from '../router';
 import {
-  isNew, loadInitial, loadOlder, markAllSeen, markSeenUpTo, on, state, totalUnread,
+  isNew, loadInitial, loadOlder, markAllSeen, markSeenUpTo, on, setMuted, state, unreadElsewhere,
 } from '../store';
 import type { Chat, Message } from '../types';
 import { clear, coalesce, dayKey, dayLabel, el, loadPref } from '../util';
@@ -12,8 +12,10 @@ import { avatar } from './avatar';
 import { buildBubble } from './bubble';
 import { icon } from './icons';
 import { openLightbox } from './lightbox';
+import { openMessageSheet } from './messageSheet';
 import { createSeenTracker } from './seenTracker';
 import { toast } from './toast';
+import { openVersions } from './versionsDialog';
 
 const MAX_UNSEEN_PAGES = 6;
 const MAX_JUMP_PAGES = 40;
@@ -41,15 +43,19 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
   const scroller = el('div', { class: 'messages', tabindex: '-1' }, sentinel, content);
   const toBottom = el('button', { class: 'to-bottom', type: 'button', 'aria-label': 'Zu den neuesten Nachrichten' }, icon('down', 22));
   const footer = el('footer', { class: 'readonly-bar' });
-  // Floating pill instead of a header button: the header stays uncluttered on phones,
-  // and the action only exists while there is something left to mark.
-  const seenPill = el('button', {
-    class: 'glass-btn seen-pill', type: 'button', hidden: true,
+  // A slim bar under the header instead of a floating pill: it takes a little height only while something is unseen
+  // and never covers message text. "Gesehen" is a purely local marker.
+  const newBarText = el('span', { class: 'new-bar-text' });
+  const seenBtn = el('button', {
+    class: 'btn small-btn', type: 'button',
     title: 'Alle Nachrichten dieses Chats lokal als gesehen markieren',
     onclick: () => { void markAllSeen(chatId); },
-  }, icon('checkAll', 18), el('span', null, 'Alle als gesehen'));
-  const body = el('div', { class: 'messages-wrap' }, scroller, seenPill, toBottom);
-  const pane = el('section', { class: 'chat-pane' }, head, body, footer);
+  }, icon('checkAll', 16), 'Alle als gesehen');
+  const newBar = el('div', { class: 'new-bar', role: 'status', hidden: true }, newBarText, seenBtn);
+  // The connection hint of the chat list, repeated here: on a phone you are mostly inside a chat.
+  const offlineBar = el('div', { class: 'banner chat-banner', role: 'status', hidden: true });
+  const body = el('div', { class: 'messages-wrap' }, scroller, toBottom);
+  const pane = el('section', { class: 'chat-pane' }, head, offlineBar, newBar, body, footer);
   host.append(pane);
 
   const tracker = createSeenTracker(scroller, (newest) => { void markSeenUpTo(chatId, newest); });
@@ -62,7 +68,9 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
   const scrollToBottom = (smooth = false): void => {
     scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   };
-  const sigOf = (m: Message): string => `${m.deleted ? 1 : 0}|${m.media?.status ?? ''}`;
+  // A bubble is rebuilt when something it shows changes (not for seen/played, which only toggle a class or a dot).
+  const sigOf = (m: Message): string =>
+    JSON.stringify([m.deleted ? 1 : 0, m.media?.status ?? '', m.media?.loadable ? 1 : 0, m.media?.skipReason ?? '', m.protectedAt ? 1 : 0, m.edited ? 1 : 0, m.editCount ?? 0, m.text ?? '', m.caption ?? '']);
 
   const runCleanups = (id: string): void => {
     cleanups.get(id)?.forEach((fn) => fn());
@@ -71,6 +79,8 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
 
   const makeRow = (m: Message): HTMLElement => {
     const row = buildBubble(m, {
+      openSheet: openMessageSheet,
+      showVersions: openVersions,
       isGroup: chat()?.isGroup ?? false,
       openImage: (msg) => {
         const images = list().filter((x) => x.type === 'image' && !x.deleted && (!x.media?.status || x.media.status === 'ready'));
@@ -145,16 +155,32 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
   const renderHead = (): void => {
     const c = chat();
     clear(head);
-    const others = totalUnread() - (c?.unreadCount ?? 0);
+    const others = unreadElsewhere(chatId);
     const back = el('button', { class: 'icon-btn back', type: 'button', 'aria-label': 'Zurück zur Chatliste', onclick: goBack },
       icon('back', 26), others > 0 ? el('span', { class: 'back-count' }, String(others)) : null);
     const subtitle = c?.isGroup ? 'Gruppe' : c?.phone ? `+${c.phone}` : '';
-    seenPill.hidden = !((c?.unreadCount ?? 0) > 0 || list().some(isNew));
+    const unseen = Math.max(c?.unreadCount ?? 0, list().filter(isNew).length);
+    newBar.hidden = unseen === 0;
+    newBarText.textContent = `${unseen} ${unseen === 1 ? 'neue Nachricht' : 'neue Nachrichten'}`;
+    const muted = c?.muted === true;
+    const mute = el('button', {
+      class: 'icon-btn mute', type: 'button', 'aria-pressed': muted ? 'true' : 'false',
+      'aria-label': muted ? 'Stumm aufheben' : 'Chat stumm schalten',
+      title: muted ? 'Stumm: zählt nicht bei „Neu“. Tippen hebt auf.' : 'Stumm schalten: zählt nicht mehr bei „Neu“',
+    }, icon(muted ? 'bellOff' : 'bell', 22));
+    mute.addEventListener('click', () => { void setMuted(chatId, !muted); });
     head.append(
       back,
       c ? avatar(c, 'sm') : el('div', { class: 'avatar avatar-sm' }),
       el('div', { class: 'chat-title' }, el('span', { class: 'name' }, c?.name ?? 'Chat'), subtitle ? el('span', { class: 'sub' }, subtitle) : null),
+      ...(c ? [mute] : []),
     );
+  };
+
+  const renderOffline = (): void => {
+    clear(offlineBar);
+    offlineBar.hidden = state.online;
+    if (!state.online) offlineBar.append(icon('wifiOff', 16), 'Keine Verbindung zum waread-Server. Neuer Versuch läuft …');
   };
 
   const renderFooter = (): void => {
@@ -164,7 +190,7 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
     if (c && !c.isGroup && c.phone) {
       footer.append(el('a', { class: 'btn', href: `https://wa.me/${c.phone}`, target: '_blank', rel: 'noopener noreferrer' }, 'In WhatsApp öffnen', icon('external', 16)));
     } else if (c?.isGroup) {
-      footer.append(el('span', { class: 'ro-hint' }, 'Für Gruppen gibt es keinen Direktlink. Bitte WhatsApp selbst öffnen.'));
+      footer.append(el('span', { class: 'ro-hint' }, 'Gruppen lassen sich nicht direkt öffnen. Bitte WhatsApp selbst starten.'));
     } else if (c) {
       footer.append(el('span', { class: 'ro-hint' }, 'Keine Rufnummer bekannt. Bitte WhatsApp selbst öffnen.'));
     }
@@ -268,6 +294,7 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
     if (wasAtBottom) scrollToBottom();
   }));
   globalOffs.push(on('chats', coalesce(() => { renderHead(); renderFooter(); })));
+  globalOffs.push(on('online', renderOffline));
 
   // --- initial load -----------------------------------------------------------
   const showError = (message: string): void => {
@@ -320,6 +347,7 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
 
   renderHead();
   renderFooter();
+  renderOffline();
   olderObserver.observe(sentinel);
   void init();
 

@@ -74,6 +74,12 @@ export function startEvents(h: SseHandlers): () => void {
       if (typeof d.seenAt === 'number' || d.seenAt === null) u.seenAt = d.seenAt;
       if (typeof d.playedAt === 'number' || d.playedAt === null) u.playedAt = d.playedAt;
       if (d.deleted === true) u.deleted = true;
+      if (typeof d.deletedAt === 'number') u.deletedAt = d.deletedAt;
+      if (d.edited === true) u.edited = true;
+      if (typeof d.editedAt === 'number') u.editedAt = d.editedAt;
+      if (typeof d.editCount === 'number') u.editCount = d.editCount;
+      if (typeof d.protectedAt === 'number' || d.protectedAt === null) u.protectedAt = d.protectedAt;
+      if (typeof d.text === 'string' || d.text === null) u.text = d.text;
       h.onMessageUpdated(u);
     });
     source.addEventListener('media_ready', (ev) => {
@@ -84,6 +90,8 @@ export function startEvents(h: SseHandlers): () => void {
       if (status) u.status = status;
       if (typeof d.thumbnailPath === 'string') u.thumbnailPath = d.thumbnailPath;
       if (typeof d.filePath === 'string') u.filePath = d.filePath;
+      if (typeof d.skipReason === 'string' || d.skipReason === null) u.skipReason = d.skipReason;
+      if (typeof d.loadable === 'boolean') u.loadable = d.loadable;
       h.onMediaReady(u);
     });
     source.addEventListener('connection_status', (ev) => {

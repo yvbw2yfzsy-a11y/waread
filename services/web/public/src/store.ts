@@ -8,7 +8,7 @@
 
 import { api } from './api';
 import { toast } from './components/toast';
-import type { Chat, ChatPreview, MediaInfo, Message, Settings, StatusInfo } from './types';
+import type { Chat, ChatPreview, MediaInfo, Message, MessageUpdate, Settings, StatusInfo } from './types';
 import { debounce } from './util';
 
 type Listener = (payload?: unknown) => void;
@@ -44,13 +44,25 @@ export function sortedChats(): Chat[] {
   return [...state.chats.values()].sort((a, b) => b.lastMessageAt - a.lastMessageAt);
 }
 
+/** Unread ("neu") messages over all chats that are not muted. */
 export function totalUnread(): number {
   let n = 0;
-  for (const c of state.chats.values()) n += c.unreadCount;
+  for (const c of state.chats.values()) if (!c.muted) n += c.unreadCount;
   return n;
 }
 
-export const isNew = (m: Message): boolean => !m.fromMe && !m.seenAt && !m.deleted;
+/** Unread messages in other (not muted) chats, for the counter on the back button. */
+export function unreadElsewhere(chatId: string): number {
+  let n = 0;
+  for (const c of state.chats.values()) if (!c.muted && c.id !== chatId) n += c.unreadCount;
+  return n;
+}
+
+/**
+ * "New" = incoming, not seen locally, not deleted. Type "other" is what the API calls "system" (placeholders such as
+ * "Nicht unterstützter Nachrichtentyp"): the server does not count those, so neither does the client.
+ */
+export const isNew = (m: Message): boolean => !m.fromMe && !m.seenAt && !m.deleted && m.type !== 'other';
 
 export function previewOf(m: Message): ChatPreview {
   const p: ChatPreview = {
@@ -166,31 +178,99 @@ export function onNewMessage(chatId: string, raw: Message): void {
   emit('chats');
 }
 
-export function onMessageUpdated(u: { messageId: string; seenAt?: number | null; playedAt?: number | null; deleted?: boolean }): void {
+export function onMessageUpdated(u: MessageUpdate): void {
   const m = state.byId.get(u.messageId);
   if (!m) { refreshChatsSoon(); return; }
   const wasNew = isNew(m);
   if (u.seenAt !== undefined) m.seenAt = u.seenAt;
   if (u.playedAt !== undefined) m.playedAt = u.playedAt;
   if (u.deleted) m.deleted = true;
+  if (u.deletedAt !== undefined) m.deletedAt = u.deletedAt;
+  if (u.edited) m.edited = true;
+  if (u.editedAt !== undefined) m.editedAt = u.editedAt;
+  if (u.editCount !== undefined) m.editCount = u.editCount;
+  if (u.protectedAt !== undefined) m.protectedAt = u.protectedAt;
+  // A new text arrives with an edit. A deleted message keeps its text unless the server hides it (text null).
+  if (u.text !== undefined && m.type !== 'audio') {
+    const isCaption = m.type === 'image' || m.type === 'video' || m.type === 'document' || m.type === 'sticker';
+    if (isCaption) {
+      if (u.text === null) delete m.caption; else m.caption = u.text;
+    } else if (u.text === null) delete m.text;
+    else m.text = u.text;
+  }
   const chat = state.chats.get(m.chatId);
   if (chat && wasNew && !isNew(m)) {
     chat.unreadCount = Math.max(0, chat.unreadCount - 1);
     emit('chats');
   }
+  if (u.text !== undefined && chat && chat.lastMessageAt <= m.waTimestamp) {
+    chat.preview = previewOf(m);
+    emit('chats');
+  }
   emit(`msg:${m.id}`, m);
 }
 
-export function onMediaReady(u: { messageId: string; status?: MediaInfo['status']; thumbnailPath?: string }): void {
+export function onMediaReady(u: { messageId: string; status?: MediaInfo['status']; thumbnailPath?: string; skipReason?: string | null; loadable?: boolean }): void {
   const m = state.byId.get(u.messageId);
   if (!m) return;
   // The event also reports failed / expired; a missing status is treated as ready.
-  m.media = {
+  const media: MediaInfo = {
     ...(m.media ?? {}),
     status: u.status ?? 'ready',
     ...(u.thumbnailPath ? { hasThumbnail: true } : {}),
   };
+  if (u.skipReason === null || media.status === 'ready') delete media.skipReason;
+  else if (typeof u.skipReason === 'string') media.skipReason = u.skipReason;
+  if (u.loadable === true) media.loadable = true;
+  else if (u.loadable === false || media.status === 'ready') delete media.loadable;
+  m.media = media;
   emit(`msg:${m.id}`, m);
+}
+
+// ---------------------------------------------------------------------------
+// Shield ("Schild"), load media, mute. All of these only touch the waread server.
+// ---------------------------------------------------------------------------
+
+/** Sets or removes the shield. Returns false (with a toast) if the server call failed. */
+export async function setProtected(m: Message, on: boolean): Promise<boolean> {
+  try {
+    const res = await api.protect(m.id, on);
+    m.protectedAt = res.protectedAt;
+    if (res.loading && m.media) m.media = { ...m.media, status: 'pending' };
+    emit(`msg:${m.id}`, m);
+    toast(on
+      ? (res.loading ? 'Geschützt. Die Datei wird jetzt geladen.' : 'Geschützt: wird nicht automatisch gelöscht.')
+      : 'Schutz aufgehoben. Die Nachricht wird nach der Aufbewahrungszeit gelöscht.');
+    return true;
+  } catch {
+    toast('Schild konnte nicht gesetzt werden.');
+    return false;
+  }
+}
+
+/** "Medium jetzt laden". The file arrives later via the media_ready event. */
+export async function loadMedia(m: Message): Promise<void> {
+  try {
+    await api.loadMedia(m.id);
+    if (m.media) m.media = { ...m.media, status: 'pending', loadable: false };
+    emit(`msg:${m.id}`, m);
+  } catch (err) {
+    toast(err instanceof Error && err.message === 'not_loadable'
+      ? 'Dieses Medium lässt sich nicht mehr laden.'
+      : 'Laden konnte nicht angefordert werden.');
+  }
+}
+
+export async function setMuted(chatId: string, muted: boolean): Promise<void> {
+  const chat = state.chats.get(chatId);
+  try {
+    await api.muteChat(chatId, muted);
+    if (chat) chat.muted = muted;
+    emit('chats');
+    toast(muted ? 'Chat stumm: zählt nicht mehr bei „Neu“.' : 'Chat nicht mehr stumm.');
+  } catch {
+    toast('Stumm-Einstellung konnte nicht gespeichert werden.');
+  }
 }
 
 // ---------------------------------------------------------------------------

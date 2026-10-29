@@ -62,6 +62,13 @@ thumbnail_short_side = 200                 # Pixel, Thumbnails für Bilder
 convert_voice = true                       # Sprachnachrichten mit ffmpeg in ein von Safari abspielbares Format wandeln
 ffmpeg_path = "ffmpeg"                     # muss im PATH der Unit liegen (/usr/local/bin:/usr/bin:/bin) oder absolut sein
 ffmpeg_timeout_seconds = 60
+max_mb_forced = 500                        # größtes Medium, das „Medium jetzt laden“ noch holt (1..2048 MB), unabhängig von max_mb_*
+# Einmal-Ansehen-Medien (Foto, Video, Sprachnachricht) wie normale Medien speichern. Ab Werk aus. Ob WhatsApp den Schlüssel
+# für Einmal-Medien an dieses verknüpfte Gerät liefert, ist ungeprüft: Das Journal zeigt es je Nachricht als Zeile
+# "viewonce_probe" (nur Ja/Nein, kein Inhalt). Erst dort nachsehen (journalctl -u waread-ingest -o cat | grep viewonce_probe),
+# dann einschalten. Mit true lädt der Ingest solche Medien bei Ankunft herunter (ein HTTPS-Abruf je Medium, wie bei jedem
+# Auto-Download); der Absender erwartet bei Einmal-Medien, dass nichts bleibt.
+store_view_once = false
 
 # Wiederverbindung nach Verbindungsverlust
 backoff_start_seconds = 5
@@ -89,7 +96,7 @@ cookie_secure = "auto"                     # "auto" = Secure, wenn Nginx X-Forwa
 session_days = 30
 login_max_attempts = 5                     # je Client-IP und Zeitfenster
 login_window_minutes = 15
-hide_deleted_content = true                # Würde Text/Medien als gelöscht markierter Nachrichten nicht ausliefern. WIRKUNGSLOS, solange der Ingest keine Löschungen verarbeitet (Spalte deleted bleibt 0): „Für alle gelöscht“ bleibt bis zum Ende der Aufbewahrung lesbar.
+hide_deleted_content = false               # false (Standard): „Für alle gelöscht“ bleibt lesbar und wird mit „Vom Absender gelöscht“ gekennzeichnet. true: nur der Hinweis, Text und Medien werden nicht ausgeliefert. Eine vorhandene config.toml behält ihren alten Wert (frühere Fassungen: true): zum Anzeigen hier auf false stellen.
 log_level = "info"
 max_sse_clients = 16
 # check_origin = false                     # true nur, wenn Nginx Host/X-Forwarded-Host durchreicht, sonst scheitern alle POST/PUT

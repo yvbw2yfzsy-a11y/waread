@@ -27,6 +27,10 @@ export interface MediaInfo {
   status?: 'pending' | 'ready' | 'failed' | 'skipped' | 'expired';
   /** True -> a thumbnail can be fetched with api.thumbUrl(). */
   hasThumbnail?: boolean;
+  /** Why the file is missing: rule_off, too_large, history, queue_full, retention, failed, link_expired. */
+  skipReason?: string;
+  /** True -> "Medium jetzt laden" is possible (the ingest service still holds the keys). */
+  loadable?: boolean;
 }
 
 export interface QuotedRef {
@@ -35,6 +39,10 @@ export interface QuotedRef {
   fromMe?: boolean;
   text?: string;
   type?: MessageType;
+  /** True -> the original message is still stored (the data comes from it). */
+  available?: boolean;
+  /** The original was deleted by its sender. */
+  deleted?: boolean;
 }
 
 export interface Message {
@@ -54,6 +62,28 @@ export interface Message {
   /** Local "played" state for voice notes. */
   playedAt?: number | null;
   deleted?: boolean;
+  /** When the sender deleted the message for everyone (unix seconds). */
+  deletedAt?: number | null;
+  edited?: boolean;
+  editedAt?: number | null;
+  /** Number of earlier versions (api.versions()). */
+  editCount?: number;
+  /** "Einmal" message (view once): only a label, the file behaves like any other. */
+  viewOnce?: boolean;
+  /** Shield: when set, no automatic run or normal "clear storage" deletes the message. */
+  protectedAt?: number | null;
+}
+
+export interface MessageVersion {
+  version: number;
+  text: string | null;
+  replacedAt: number;
+}
+
+export interface MessageVersions {
+  id: string;
+  current: { text: string | null; editedAt: number | null };
+  versions: MessageVersion[];
 }
 
 export interface ChatPreview {
@@ -75,6 +105,8 @@ export interface Chat {
   lastMessageAt: number;
   preview: ChatPreview;
   unreadCount: number;
+  /** Muted chats do not count towards "Neu" and the tab badge. */
+  muted: boolean;
 }
 
 /** "off" = store the message, do not download the file. */
@@ -95,6 +127,9 @@ export interface Settings {
 export interface StorageUsage {
   /** Media files plus database file. */
   totalBytes: number;
+  /** Messages with a shield, and the size of their ready media files. */
+  protectedMessages: number;
+  protectedMediaBytes: number;
   perChat: { id: string; name: string; bytes: number }[];
   perType: { type: string; bytes: number }[];
 }
@@ -118,10 +153,31 @@ export interface SearchHit {
 
 export type ClearScope = 'chat' | 'media' | 'all';
 
+export interface ClearResult {
+  deletedMessages: number;
+  deletedMedia: number;
+  freedBytes: number;
+  /** Protected messages that were left alone. */
+  keptProtected: number;
+}
+
+export interface MessageUpdate {
+  messageId: string;
+  seenAt?: number | null;
+  playedAt?: number | null;
+  deleted?: boolean;
+  deletedAt?: number | null;
+  edited?: boolean;
+  editedAt?: number | null;
+  editCount?: number;
+  protectedAt?: number | null;
+  text?: string | null;
+}
+
 export interface SseHandlers {
   onNewMessage(chatId: string, message: Message): void;
-  onMessageUpdated(u: { messageId: string; seenAt?: number | null; playedAt?: number | null; deleted?: boolean }): void;
-  onMediaReady(u: { messageId: string; status?: MediaInfo['status']; thumbnailPath?: string; filePath?: string }): void;
+  onMessageUpdated(u: MessageUpdate): void;
+  onMediaReady(u: { messageId: string; status?: MediaInfo['status']; thumbnailPath?: string; filePath?: string; skipReason?: string | null; loadable?: boolean }): void;
   onConnectionStatus(s: StatusInfo): void;
   onCleanupDone(u: { deletedMessages: number; deletedMedia: number }): void;
   /** History batch arrived after pairing: it creates no per-message events, so reload the chat list. */

@@ -61,7 +61,7 @@ export function mountConnectionView(host: HTMLElement): () => void {
 
   const explain = (s: typeof state.status.state): string => {
     switch (s) {
-      case 'connected': return 'waread ist als verknüpftes Gerät mit WhatsApp verbunden und empfängt Nachrichten. Es sendet nichts zurück: keine Nachrichten, keine Lesebestätigungen.';
+      case 'connected': return 'waread ist als verknüpftes Gerät mit WhatsApp verbunden und empfängt Nachrichten. waread selbst sendet nichts: keine Nachrichten, keine Lesebestätigungen, kein „abgespielt“. Wie jedes verknüpfte Gerät bestätigt die WhatsApp-Bibliothek aber den Empfang der Nachrichten.';
       case 'connecting': return 'Die Verbindung zu WhatsApp wird aufgebaut.';
       case 'needs_qr': return 'waread muss mit deinem WhatsApp-Konto gekoppelt werden. Scanne den QR-Code mit dem Telefon.';
       case 'disconnected': return 'Keine Verbindung zu WhatsApp. Wenn das nach einigen Minuten so bleibt, wurde die Verknüpfung vermutlich in WhatsApp entfernt. Mit „Neu verbinden“ bittet diese Seite den waread-Dienst, eine neue Kopplung zu beginnen; sobald er einen QR-Code bereitstellt, steht der Status auf „QR-Code scannen“ und der Code erscheint hier.';

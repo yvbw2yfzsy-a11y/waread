@@ -46,7 +46,8 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 
 /* ---------- layout: one pane on phones, two panes on wide screens ---------- */
 
-.shell { position: relative; display: flex; height: 100%; }
+/* Notch / rounded corners in landscape: keep content out of the unsafe side areas. */
+.shell { position: relative; display: flex; height: 100%; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 .pane-left { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; }
 .left-host { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .pane-right { display: none; width: 100%; height: 100%; min-width: 0; flex-direction: column; background: var(--bg-chat); }
@@ -54,7 +55,9 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 .shell.chat-open .pane-right { display: flex; }
 
 @media (min-width: 900px) {
-  .shell { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); }
+  /* The row needs a fixed height (the window). With an implicit `auto` row the two panes grow with their content (a long
+     chat list) and the navigation and the footer end up below the visible area while the whole page scrolls. */
+  .shell { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .shell.chat-open .pane-left { display: flex; }
   .pane-right { display: flex; border-left: 1px solid var(--line); }
   .chat-head .back { display: none; }
@@ -96,7 +99,7 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 .st-disconnected, .st-needs_qr { --st: #ff6b6b; }
 
 .status-chip {
-  display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px;
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 12px; min-height: 40px;
   border: 1px solid var(--line); border-radius: 999px; background: var(--bg-elev);
   font-size: 13px; font-weight: 600;
 }
@@ -114,7 +117,7 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
-  flex: none; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+  flex: none; padding: 11px 14px; min-height: 44px; border: 1px solid var(--line); border-radius: 999px;
   background: var(--bg-elev); font-size: 15px; font-weight: 600;
 }
 .chip.on { background: #173a2f; border-color: #1f5b47; color: #c4f0de; }
@@ -179,6 +182,13 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 .tab-badge { position: absolute; top: 2px; right: 10px; min-width: 18px; height: 18px; font-size: 11px; }
 
 /* ---------- shared controls ---------- */
+
+.actions.vertical { flex-direction: column; align-items: stretch; }
+.btn.small-btn { padding: 8px 12px; min-height: 40px; font-size: 14px; }
+.btn.extreme { border-width: 2px; border-color: #ff8a8a; background: #5c1219; }
+.icon-btn.mute[aria-pressed="true"] { background: rgba(255, 255, 255, 0.2); }
+.chat-item.is-muted .chat-name, .chat-item.is-muted .chat-preview { color: var(--text-dim); }
+.chat-muted { display: inline-flex; margin-right: 5px; vertical-align: -2px; color: var(--text-dim); }
 
 .btn {
   display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px;

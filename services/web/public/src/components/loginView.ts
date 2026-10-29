@@ -105,7 +105,7 @@ export function showLogin(root: HTMLElement, onSuccess: () => void): void {
       );
     });
 
-    card.append(...header(), el('p', { class: 'muted' }, 'Nur lesen. Nichts wird an WhatsApp zurückgesendet.'), form);
+    card.append(...header(), el('p', { class: 'muted' }, 'Nur lesen. waread sendet keine Nachrichten und keine Lesebestätigungen.'), form);
     if (st?.passkey && passkeySupported()) {
       const pkError = el('p', { class: 'form-error', role: 'alert', hidden: true });
       card.append(pkError, passkeyButton('Mit Passkey anmelden', pkError, false));

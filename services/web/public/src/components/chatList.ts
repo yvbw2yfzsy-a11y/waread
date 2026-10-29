@@ -26,7 +26,7 @@ let filter: FilterId = loadPref<FilterId>('chatFilter', 'all');
 function matches(c: Chat, f: FilterId): boolean {
   switch (f) {
     case 'all': return true;
-    case 'new': return c.unreadCount > 0;
+    case 'new': return c.unreadCount > 0 && !c.muted;
     case 'groups': return c.isGroup;
     case 'photos': return c.preview.type === 'image';
     case 'voice': return c.preview.type === 'audio';
@@ -44,7 +44,7 @@ function previewNode(chat: Chat): DocumentFragment {
 
   let label = p.text;
   switch (p.type) {
-    case 'audio': label = formatDuration(p.durationSec); break;
+    case 'audio': label = p.durationSec !== undefined ? formatDuration(p.durationSec) : 'Sprachnachricht'; break;
     case 'document': {
       const name = p.text || 'Dokument';
       label = p.pages ? `${name} · ${p.pages} ${p.pages === 1 ? 'Seite' : 'Seiten'}` : name;
@@ -61,11 +61,12 @@ function previewNode(chat: Chat): DocumentFragment {
 }
 
 function chatItem(chat: Chat, activeId: string | null): HTMLElement {
-  const hasNew = chat.unreadCount > 0;
+  // Muted chats do not count as new and get no yellow marks; a bell-off icon says why.
+  const hasNew = chat.unreadCount > 0 && !chat.muted;
   const link = el(
     'a',
     {
-      class: `chat-item${hasNew ? ' has-new' : ''}${chat.id === activeId ? ' active' : ''}`,
+      class: `chat-item${hasNew ? ' has-new' : ''}${chat.muted ? ' is-muted' : ''}${chat.id === activeId ? ' active' : ''}`,
       href: hrefChat(chat.id),
       'data-chat-id': chat.id,
       'aria-current': chat.id === activeId ? 'true' : null,
@@ -76,7 +77,9 @@ function chatItem(chat: Chat, activeId: string | null): HTMLElement {
       { class: 'chat-body' },
       el('div', { class: 'chat-row' },
         el('span', { class: 'chat-name' }, chat.name),
-        el('span', { class: 'chat-time' }, listTime(chat.lastMessageAt))),
+        el('span', { class: 'chat-time' },
+          chat.muted ? el('span', { class: 'chat-muted', role: 'img', 'aria-label': 'Stumm', title: 'Stumm' }, icon('bellOff', 14)) : null,
+          listTime(chat.lastMessageAt))),
       el('div', { class: 'chat-row' },
         el('span', { class: 'chat-preview' }, previewNode(chat)),
         hasNew ? el('span', { class: 'badge-new', 'aria-label': `${chat.unreadCount} neue Nachrichten` }, chat.unreadCount > 99 ? '99+' : String(chat.unreadCount)) : null),
@@ -116,7 +119,7 @@ export function mountChatList(host: HTMLElement): () => void {
 
   const renderChips = (): void => {
     clear(chips);
-    const chatsWithNew = [...state.chats.values()].filter((c) => c.unreadCount > 0).length;
+    const chatsWithNew = [...state.chats.values()].filter((c) => c.unreadCount > 0 && !c.muted).length;
     for (const f of FILTERS) {
       const b = el('button', { class: `chip${f.id === filter ? ' on' : ''}`, type: 'button', 'aria-pressed': f.id === filter ? 'true' : 'false' }, f.label);
       if (f.id === 'new' && chatsWithNew > 0) b.append(el('span', { class: 'chip-count' }, String(chatsWithNew)));

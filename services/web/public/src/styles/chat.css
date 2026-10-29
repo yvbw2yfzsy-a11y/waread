@@ -43,6 +43,14 @@
 .new-divider::before, .new-divider::after { content: ""; flex: 1; height: 1px; background: var(--yellow); opacity: 0.7; }
 .new-divider span { white-space: nowrap; }
 
+/* Slim bar under the header while something is unseen; it takes height instead of floating over the messages. */
+.new-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 12px; background: var(--bg-elev); border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 700; color: var(--yellow);
+}
+.chat-banner { margin: 0; border-radius: 0; }
+
 /* ---------- bubbles ---------- */
 
 .msg-row { position: relative; display: flex; margin: 2px 0; }
@@ -57,6 +65,24 @@
 .out .bubble { background: var(--bubble-out); border-bottom-right-radius: 5px; }
 
 /* Per-message "new" marker (local only). */
+.bubble:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.bubble { cursor: pointer; }
+.bubble.is-sticker { background: transparent; padding: 0; }
+
+/* Labels on a bubble (deleted, "Einmal"): text and symbol, no colour needed. Shapes differ: dashed = deleted. */
+.tag {
+  display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; margin: 0 0 5px;
+  padding: 3px 9px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 9px;
+  font-size: 12.5px; font-weight: 600; color: rgba(255, 255, 255, 0.85);
+}
+.tag-deleted { border-style: dashed; }
+.meta-shield { display: inline-flex; margin-right: 5px; vertical-align: -2px; }
+.meta-edit {
+  display: inline; margin: -8px 5px -8px 0; padding: 8px 2px; border: 0; background: none;
+  font-size: 11.5px; line-height: 1; text-decoration: underline; color: inherit;
+}
+.text.deleted-body { padding-top: 2px; }
+
 .msg-row.is-new .bubble::before {
   content: ""; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; z-index: 1;
   border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 2px var(--bg-chat);
@@ -79,7 +105,7 @@
 /* Time sits bottom right inside the bubble. */
 .meta {
   float: right; margin: 6px 0 -3px 12px; font-size: 11.5px; line-height: 1;
-  color: rgba(255, 255, 255, 0.55); white-space: nowrap;
+  color: rgba(255, 255, 255, 0.68); white-space: nowrap;
 }
 
 /* ---------- reply quotes ---------- */
@@ -110,9 +136,14 @@
 .video { display: block; width: min(72vw, 340px); max-width: 100%; border-radius: 13px; background: #000; }
 
 .media-missing {
-  display: flex; align-items: center; gap: 10px; min-width: 220px; padding: 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 220px; padding: 14px;
   border-radius: 13px; background: rgba(0, 0, 0, 0.2); color: var(--text-dim); font-size: 14px;
 }
+.media-missing-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; min-width: 0; }
+.media-missing-text strong { color: var(--text); font-size: 14px; }
+.media-missing .btn { margin-left: auto; }
+/* The time pill sits over the lower right of a captionless media bubble: leave room for it. */
+.bubble.meta-overlay .media-missing { padding-bottom: 36px; }
 
 /* Photo/video without caption: time as an overlay pill. */
 .bubble.meta-overlay .meta {
@@ -146,10 +177,15 @@
 }
 .voice-main { flex: 1; min-width: 0; }
 .wave { display: flex; align-items: center; gap: 2px; height: 30px; cursor: pointer; touch-action: pan-y; }
+.voice-main { min-width: 0; }
 .wave i { flex: 1; min-width: 2px; max-width: 4px; align-self: center; border-radius: 2px; background: rgba(255, 255, 255, 0.32); }
 .wave i.on { background: var(--text); }
-.voice-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; font-size: 12px; color: rgba(255, 255, 255, 0.62); }
-.speed { padding: 2px 9px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.14); font-size: 12px; font-weight: 700; }
+.voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 2px; font-size: 12px; color: rgba(255, 255, 255, 0.62); }
+/* Right of the waveform, a real tap target (44 x 40 px). */
+.speed {
+  flex: none; min-width: 44px; height: 40px; padding: 0 6px; border: 0; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14); font-size: 13px; font-weight: 700;
+}
 .voice.broken .play { opacity: 0.5; }
 .bubble.has-voice .meta { display: block; float: none; margin: 2px 2px -2px 0; text-align: right; }
 
@@ -174,7 +210,7 @@
   border-top: 1px solid var(--line); background: var(--bg-elev); color: var(--text-dim); font-size: 13px; line-height: 1.25;
 }
 .ro-text { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
-.readonly-bar .btn { flex: none; padding: 7px 12px; font-size: 14px; }
+.readonly-bar .btn { flex: none; padding: 10px 14px; min-height: 40px; font-size: 14px; }
 .ro-hint { flex-basis: 100%; font-size: 12.5px; }
 
 /* ---------- full-screen image viewer ---------- */
@@ -197,6 +233,8 @@ html.lb-open, html.lb-open body { overflow: hidden; }
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
 .lb-count { color: #fff; font-size: 15px; font-weight: 600; }
+.lb-actions { display: flex; gap: 8px; }
+.lb-btn.on { box-shadow: inset 0 0 0 2px #fff; }
 .lb-nav {
   position: absolute; z-index: 2; top: 50%; display: none; align-items: center; justify-content: center;
   width: 48px; height: 64px; transform: translateY(-50%); border: 0; border-radius: 12px;

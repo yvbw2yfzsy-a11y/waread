@@ -28,6 +28,15 @@ const PATHS = {
   refresh: '<path d="M20 5v5h-5M4 19v-5h5M18.5 10A7 7 0 0 0 6 7.5M5.5 14A7 7 0 0 0 18 16.5"/>',
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  shield: '<path d="M12 3.5 19 6.5v5c0 4.4-2.9 8-7 9.5-4.1-1.5-7-5.1-7-9.5v-5z"/>',
+  shieldCheck: '<path d="M12 3.5 19 6.5v5c0 4.4-2.9 8-7 9.5-4.1-1.5-7-5.1-7-9.5v-5z"/><path d="m9 12 2.2 2.2L15.2 10"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  bellOff: '<path d="M6 16.5V11a6 6 0 0 1 9.6-4.8M18 11v5.5l1.5 2H8M10 20.5a2 2 0 0 0 4 0M3 3l18 18"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  once: '<circle cx="12" cy="12" r="8.5"/><path d="m10.3 9.6 1.9-1.2V16"/>',
+  cloudDown: '<path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.2 3.9 3.9 0 0 1 17.6 18"/><path d="M12 11v8M9 16.2l3 3 3-3"/>',
+  share: '<path d="M12 15V4M8 8l4-4 4 4M5 12v7.5h14V12"/>',
+  history: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

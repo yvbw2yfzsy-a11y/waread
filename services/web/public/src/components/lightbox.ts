@@ -1,26 +1,19 @@
 // Full-screen image viewer: pinch zoom, double-tap zoom, pan, swipe left/right
-// to change image, swipe down to close, wheel zoom on desktop, save button.
+// to change image, swipe down to close, wheel zoom on desktop, save and shield buttons.
 // Built on Pointer Events so touch, pen and mouse share one code path.
 
 import { api } from '../api';
+import { setProtected } from '../store';
 import type { Message } from '../types';
 import { clamp, el, formatDateTime } from '../util';
 import { icon } from './icons';
+import { saveMedia } from './saveMedia';
 
 const MAX_SCALE = 6;
 const DOUBLE_TAP_MS = 300;
 const TAP_SLOP = 8;
 
 let active: { close: () => void } | null = null;
-
-function extFor(mime: string | undefined): string {
-  switch (mime) {
-    case 'image/png': return 'png';
-    case 'image/webp': return 'webp';
-    case 'image/gif': return 'gif';
-    default: return 'jpg';
-  }
-}
 
 export function openLightbox(images: Message[], startId: string): void {
   active?.close();
@@ -40,10 +33,11 @@ export function openLightbox(images: Message[], startId: string): void {
   const counter = el('span', { class: 'lb-count' });
   const caption = el('div', { class: 'lb-caption' });
   const closeBtn = el('button', { class: 'lb-btn', type: 'button', 'aria-label': 'Schließen' }, icon('close', 24));
-  const saveLink = el('a', { class: 'lb-btn', 'aria-label': 'Bild speichern', title: 'Speichern' }, icon('download', 24));
+  const saveBtn = el('button', { class: 'lb-btn', type: 'button', 'aria-label': 'Auf dem Gerät sichern', title: 'Auf dem Gerät sichern' }, icon('share', 24));
+  const shieldBtn = el('button', { class: 'lb-btn', type: 'button' });
   const prevBtn = el('button', { class: 'lb-nav lb-prev', type: 'button', 'aria-label': 'Vorheriges Bild' }, icon('back', 28));
   const nextBtn = el('button', { class: 'lb-nav lb-next', type: 'button', 'aria-label': 'Nächstes Bild' }, icon('next', 28));
-  const top = el('div', { class: 'lb-top' }, closeBtn, counter, saveLink);
+  const top = el('div', { class: 'lb-top' }, closeBtn, counter, el('div', { class: 'lb-actions' }, shieldBtn, saveBtn));
   const root = el('div', { class: 'lightbox', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bildansicht' }, stage, top, prevBtn, nextBtn, caption);
 
   const apply = (animateMs = 0): void => {
@@ -79,6 +73,17 @@ export function openLightbox(images: Message[], startId: string): void {
     apply(animate ? 180 : 0);
   };
 
+  /** Shield button: shows the state of the current image and toggles it. The file name for saving comes from saveName(). */
+  const paintShield = (m: Message): void => {
+    const on = m.protectedAt !== null && m.protectedAt !== undefined;
+    shieldBtn.replaceChildren(icon(on ? 'shieldCheck' : 'shield', 24));
+    shieldBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    const label = on ? 'Schutz aufheben' : 'Mit Schild schützen';
+    shieldBtn.setAttribute('aria-label', label);
+    shieldBtn.title = label;
+    shieldBtn.classList.toggle('on', on);
+  };
+
   const show = (i: number): void => {
     index = clamp(i, 0, images.length - 1);
     const m = images[index];
@@ -86,12 +91,11 @@ export function openLightbox(images: Message[], startId: string): void {
     img.src = api.mediaUrl(m.id);
     reset();
     counter.textContent = images.length > 1 ? `${index + 1} / ${images.length}` : '';
-    const name = m.media?.fileName ?? `waread-${m.id}.${extFor(m.media?.mimeType)}`;
-    saveLink.setAttribute('href', api.mediaUrl(m.id));
-    saveLink.setAttribute('download', name);
+    paintShield(m);
     caption.textContent = '';
     if (m.caption) caption.append(el('p', null, m.caption));
-    caption.append(el('span', null, `${m.fromMe ? 'Du' : m.senderName ?? ''}${m.fromMe || m.senderName ? ' · ' : ''}${formatDateTime(m.waTimestamp)}`));
+    const label = m.viewOnce ? 'Einmal-Foto · ' : '';
+    caption.append(el('span', null, `${label}${m.fromMe ? 'Du' : m.senderName ?? ''}${m.fromMe || m.senderName ? ' · ' : ''}${formatDateTime(m.waTimestamp)}`));
     prevBtn.hidden = index === 0;
     nextBtn.hidden = index === images.length - 1;
     const neighbour = images[index + 1] ?? images[index - 1];
@@ -241,6 +245,12 @@ export function openLightbox(images: Message[], startId: string): void {
   }, { passive: false });
 
   closeBtn.addEventListener('click', close);
+  saveBtn.addEventListener('click', () => { const m = images[index]; if (m) void saveMedia(m); });
+  shieldBtn.addEventListener('click', () => {
+    const m = images[index];
+    if (!m) return;
+    void setProtected(m, !(m.protectedAt !== null && m.protectedAt !== undefined)).then(() => { if (images[index] === m) paintShield(m); });
+  });
   prevBtn.addEventListener('click', () => step(-1));
   nextBtn.addEventListener('click', () => step(1));
   document.addEventListener('keydown', onKey);

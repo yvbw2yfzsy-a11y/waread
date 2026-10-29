@@ -7,8 +7,8 @@
 import type { Json } from './webauthnClient';
 import type {
   AuthState, PasskeyOverview, PasskeyStepPurpose,
-  Chat, ChatPreview, ClearScope, DownloadKind, DownloadMaxMb, DownloadRules, MediaInfo, Message,
-  MessageType, QuotedRef, SearchFilters, SearchHit, Settings, StatusInfo, StorageUsage, ConnState,
+  Chat, ChatPreview, ClearResult, ClearScope, DownloadKind, DownloadMaxMb, DownloadRules, MediaInfo, Message,
+  MessageType, MessageVersions, QuotedRef, SearchFilters, SearchHit, Settings, StatusInfo, StorageUsage, ConnState,
 } from './types';
 import { noteTimestampUnit, toApiTs } from './util';
 
@@ -129,6 +129,9 @@ function normMedia(v: unknown): MediaInfo | undefined {
   }
   const status = normMediaStatus(v.status);
   if (status) m.status = status;
+  const skip = str(v.skipReason);
+  if (skip) m.skipReason = skip;
+  if (v.loadable === true) m.loadable = true;
   return m;
 }
 
@@ -150,7 +153,11 @@ function normQuoted(v: unknown): QuotedRef | undefined {
   if (fromMe !== undefined) q.fromMe = fromMe;
   const text = str(v.text);
   if (text) q.text = text;
-  if (v.type !== undefined) q.type = normType(v.type);
+  if (v.type !== undefined && v.type !== null) q.type = normType(v.type);
+  const sender = str(v.sender);
+  if (sender && !q.senderName) q.senderName = sender;
+  if (typeof v.available === 'boolean') q.available = v.available;
+  if (v.deleted === true) q.deleted = true;
   return q;
 }
 
@@ -187,6 +194,15 @@ export function normMessage(v: unknown, fallbackChatId = ''): Message {
   msg.seenAt = r.seenAt === null ? null : num(r.seenAt);
   msg.playedAt = r.playedAt === null ? null : num(r.playedAt);
   if (bool(r.deleted)) msg.deleted = true;
+  const deletedAt = num(r.deletedAt);
+  if (deletedAt !== undefined) msg.deletedAt = deletedAt;
+  if (bool(r.edited)) msg.edited = true;
+  const editedAt = num(r.editedAt);
+  if (editedAt !== undefined) msg.editedAt = editedAt;
+  const editCount = num(r.editCount);
+  if (editCount !== undefined && editCount > 0) msg.editCount = editCount;
+  if (bool(r.viewOnce)) msg.viewOnce = true;
+  msg.protectedAt = r.protectedAt === null ? null : num(r.protectedAt);
   return msg;
 }
 
@@ -197,7 +213,7 @@ function normPreview(r: Raw): ChatPreview {
     type: normType(o?.type ?? r.lastMessageType),
     text: (o ? str(o.text) : str(lp)) ?? '',
   };
-  const dur = num(o?.durationSec ?? r.lastMessageDurationSec);
+  const dur = num(o?.durationSec ?? r.lastMessageDurationSeconds ?? r.lastMessageDurationSec);
   if (dur !== undefined) p.durationSec = dur;
   const pages = num(o?.pages ?? r.lastMessagePages);
   if (pages !== undefined) p.pages = pages;
@@ -209,18 +225,30 @@ function normPreview(r: Raw): ChatPreview {
   return p;
 }
 
+/** The API falls back to the id's local part when a chat has no name; show something readable instead. */
+function chatName(id: string, name: string | undefined, isGroup: boolean): string {
+  const idName = id.split('@')[0] ?? id;
+  if (name === undefined || name === '' || name === idName) {
+    if (isGroup) return 'Unbenannte Gruppe';
+    return /^\d{6,}$/.test(idName) ? `+${idName}` : idName || id;
+  }
+  return name;
+}
+
 export function normChat(v: unknown): Chat {
   const r: Raw = isObj(v) ? v : {};
   const id = str(r.id) ?? '';
   const jidPhone = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/.exec(id)?.[1];
   const rawPhone = str(r.phone)?.replace(/\D/g, '');
+  const isGroup = bool(r.isGroup) ?? id.endsWith('@g.us');
   const chat: Chat = {
     id,
-    name: str(r.name) ?? id,
-    isGroup: bool(r.isGroup) ?? id.endsWith('@g.us'),
+    name: chatName(id, str(r.name), isGroup),
+    isGroup,
     lastMessageAt: num(r.lastMessageAt) ?? num(r.lastMessageTimestamp) ?? 0,
     preview: normPreview(r),
     unreadCount: num(r.unreadCount) ?? 0,
+    muted: r.muted === true,
   };
   noteTimestampUnit(chat.lastMessageAt);
   const phone = rawPhone || jidPhone;
@@ -358,6 +386,36 @@ export const api = {
     await json('POST', `/api/messages/${enc(messageId)}/played`);
   },
 
+  /** Shield on/off. Returns whether the server also asked the ingest service to fetch a missing file. */
+  async protect(messageId: string, on: boolean): Promise<{ protectedAt: number | null; loading: boolean }> {
+    const d = await json('POST', `/api/messages/${enc(messageId)}/protect`, { protected: on });
+    const o: Raw = isObj(d) ? d : {};
+    return { protectedAt: num(o.protectedAt) ?? null, loading: o.loading === true };
+  },
+
+  async versions(messageId: string): Promise<MessageVersions> {
+    const d = await json('GET', `/api/messages/${enc(messageId)}/versions`);
+    const o: Raw = isObj(d) ? d : {};
+    const cur: Raw = isObj(o.current) ? o.current : {};
+    return {
+      id: str(o.id) ?? messageId,
+      current: { text: str(cur.text) ?? null, editedAt: num(cur.editedAt) ?? null },
+      versions: listFrom(o.versions, []).map((x) => {
+        const v: Raw = isObj(x) ? x : {};
+        return { version: num(v.version) ?? 0, text: str(v.text) ?? null, replacedAt: num(v.replacedAt) ?? 0 };
+      }),
+    };
+  },
+
+  /** "Medium jetzt laden": only stores a command; the ingest service fetches the file and reports via media_ready. */
+  async loadMedia(messageId: string): Promise<void> {
+    await json('POST', `/api/media/${enc(messageId)}/load`);
+  },
+
+  async muteChat(chatId: string, muted: boolean): Promise<void> {
+    await json('PUT', `/api/chats/${enc(chatId)}/mute`, { muted });
+  },
+
   async search(f: SearchFilters): Promise<SearchHit[]> {
     const qs = new URLSearchParams();
     if (f.q.trim()) qs.set('q', f.q.trim());
@@ -401,6 +459,8 @@ export const api = {
     const o: Raw = isObj(r) ? r : {};
     return {
       totalBytes: num(o.totalBytes) ?? 0,
+      protectedMessages: num(o.protectedMessages) ?? 0,
+      protectedMediaBytes: num(o.protectedMediaBytes) ?? 0,
       perChat: listFrom(o.perChat, []).map((x) => {
         const c: Raw = isObj(x) ? x : {};
         const id = str(c.chatId) ?? str(c.id) ?? '';
@@ -413,10 +473,19 @@ export const api = {
     };
   },
 
-  async storageClear(scope: ClearScope, chatId?: string): Promise<void> {
-    const body: { scope: ClearScope; chatId?: string; confirm: true } = { scope, confirm: true };
+  /** Protected messages stay unless includeProtected is true (the extreme variant of "clear storage"). */
+  async storageClear(scope: ClearScope, chatId?: string, includeProtected = false): Promise<ClearResult> {
+    const body: { scope: ClearScope; chatId?: string; confirm: true; includeProtected?: true } = { scope, confirm: true };
     if (chatId) body.chatId = chatId;
-    await json('POST', '/api/storage/clear', body);
+    if (includeProtected) body.includeProtected = true;
+    const d = await json('POST', '/api/storage/clear', body);
+    const o: Raw = isObj(d) ? d : {};
+    return {
+      deletedMessages: num(o.deletedMessages) ?? 0,
+      deletedMedia: num(o.deletedMedia) ?? 0,
+      freedBytes: num(o.freedBytes) ?? 0,
+      keptProtected: num(o.keptProtected) ?? 0,
+    };
   },
 
   /** Asks the ingest service to start a new pairing (QR) when it is not connected. 202 = request stored. */

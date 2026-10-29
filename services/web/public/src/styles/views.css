@@ -22,6 +22,8 @@
 .card h3 { margin: 16px 0 6px; font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); }
 .card p { margin: 0 0 8px; }
 .form-row { display: grid; grid-template-columns: 1fr minmax(150px, 50%); align-items: center; gap: 10px; margin: 8px 0; }
+/* Label above the controls: two selects in one row need the full width, or their text is cut off on a phone. */
+.form-row.stack { grid-template-columns: 1fr; gap: 6px; }
 .form-label small { display: block; font-size: 12px; color: var(--text-dim); }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .switch-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
@@ -65,7 +67,7 @@
 /* ---------- toasts ---------- */
 
 .toasts {
-  position: fixed; z-index: 100; left: 0; right: 0; bottom: calc(100px + env(safe-area-inset-bottom));
+  position: fixed; z-index: 300; left: 0; right: 0; bottom: calc(100px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
 }
 .toast {
@@ -75,7 +77,43 @@
 }
 .toast.out { opacity: 0; transition: opacity 0.25s; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
-.inline-controls { display: flex; gap: 6px; }
+.inline-controls { display: flex; gap: 8px; }
+.protected-line { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; }
+.protected-line .icon { margin-top: 2px; }
+.confirm-extreme { border-width: 2px; border-color: #ff8a8a; background: rgba(255, 107, 107, 0.12); }
+.extreme-label { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; color: #ffb4b4; }
+
+/* ---------- modal dialogs and the message action sheet ---------- */
+html.modal-open, html.modal-open body { overflow: hidden; }
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 150; display: flex; align-items: center; justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); background: rgba(0, 0, 0, 0.62);
+}
+.modal-backdrop.is-sheet { align-items: flex-end; padding-bottom: 0; }
+.modal-panel {
+  width: min(520px, 100%); max-height: 86dvh; overflow-y: auto; border: 1px solid var(--line); border-radius: 18px;
+  background: var(--bg-elev); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+.modal-panel.sheet { border-bottom-left-radius: 0; border-bottom-right-radius: 0; padding-bottom: env(safe-area-inset-bottom); }
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px 16px 6px; }
+.modal-titles h2 { margin: 0; font-size: 18px; }
+.modal-titles p { margin: 2px 0 0; }
+.modal-body { padding: 4px 16px 16px; }
+.sheet-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.sheet-item {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 56px; padding: 10px 14px; text-align: left;
+  border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.05);
+}
+.sheet-item .icon { flex: none; }
+.sheet-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sheet-text strong { font-size: 16px; }
+.sheet-text small { font-size: 12.5px; line-height: 1.3; color: var(--text-dim); }
+
+.versions { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.version { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.04); }
+.version.current { border-width: 2px; border-color: rgba(255, 255, 255, 0.4); }
+.version-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.version-text { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-controls .field { flex: 1 1 0; min-width: 0; }
 
 /* Passkey lock */

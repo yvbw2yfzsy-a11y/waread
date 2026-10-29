@@ -180,11 +180,22 @@ export function colorFor(key: string): string {
   return PALETTE[hashString(key) % PALETTE.length] ?? '#4aa0d8';
 }
 
+const TITLE_RE = /^(dr|prof|mr|mrs|ms|herr|frau)\.?$/i;
+
+/**
+ * Initials for the avatar. Titles ("Dr.") and tokens without a letter or digit ("+", "(") are skipped, and leading
+ * punctuation is stripped ("(Praxis)" -> "P"). Names made only of digits (phone numbers) give "#".
+ */
 export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  const first = [...(parts[0] ?? '')][0] ?? '?';
-  const last = parts.length > 1 ? [...(parts[parts.length - 1] ?? '')][0] ?? '' : '';
+  const tokens = name
+    .trim()
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^\p{L}\p{N}]+/u, ''))
+    .filter((t) => t !== '' && !TITLE_RE.test(t));
+  const words = tokens.filter((t) => /\p{L}/u.test(t));
+  if (words.length === 0) return tokens.length > 0 ? '#' : '?';
+  const first = [...(words[0] ?? '')][0] ?? '?';
+  const last = words.length > 1 ? [...(words[words.length - 1] ?? '')][0] ?? '' : '';
   return (first + last).toUpperCase();
 }
 
