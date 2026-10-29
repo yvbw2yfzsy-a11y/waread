@@ -27,7 +27,10 @@ export interface Config {
     loginWindowMinutes: number;
     /** Optional: Origin-Header bei schreibenden Anfragen gegen Host pruefen (Nginx muss Host durchreichen). */
     checkOrigin: boolean;
-    /** Inhalt geloeschter Nachrichten (Text, Medien) nicht ausliefern. */
+    /**
+     * Inhalt "fuer alle geloeschter" Nachrichten (Text, Medien) nicht ausliefern. Standard false: Die Oberflaeche zeigt
+     * sie mit dem Hinweis "Vom Absender gelöscht". Mit true bleibt nur der Hinweis.
+     */
     hideDeletedContent: boolean;
     publicDir: string;
     logLevel: Level;
@@ -178,7 +181,7 @@ export function buildConfig(raw: Table, readFile: (p: string) => string = (p) =>
       loginMaxAttempts: optInt(web, 'web', 'login_max_attempts', 5, 1, 100),
       loginWindowMinutes: optInt(web, 'web', 'login_window_minutes', 15, 1, 1440),
       checkOrigin: optBool(web, 'web', 'check_origin', false),
-      hideDeletedContent: optBool(web, 'web', 'hide_deleted_content', true),
+      hideDeletedContent: optBool(web, 'web', 'hide_deleted_content', false),
       publicDir: optStr(web, 'web', 'public_dir', defaultPublicDir()),
       logLevel: level,
       maxSseClients: optInt(web, 'web', 'max_sse_clients', 16, 1, 256),

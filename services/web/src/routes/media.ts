@@ -1,8 +1,9 @@
 import path from 'node:path';
 import type { App } from '../context.js';
 import { contentDisposition, mimeFromExt, resolveInside, serveFile } from '../files.js';
-import { HttpError, type Router } from '../http.js';
-import { getMediaRow } from '../queries.js';
+import { enqueueCommand } from '../db.js';
+import { HttpError, type Router, sendJson } from '../http.js';
+import { documentFileName, getLoadState, getMediaRow, hasPendingLoad } from '../queries.js';
 
 // Feste Positivliste: nur diese Typen werden inline ausgeliefert, und nur passend zum Nachrichtentyp.
 // Alles andere (Dokumente, SVG, HTML, unbekannte Typen) wird als application/octet-stream-Download geliefert.
@@ -37,6 +38,19 @@ function thumbMime(file: string): string | null {
 export function registerMediaRoutes(r: Router, app: App): void {
   const hide = app.cfg.web.hideDeletedContent;
 
+  // POST /api/media/:messageId/load -> "Medium jetzt laden". Der Web-Dienst spricht nie selbst mit WhatsApp oder dem
+  // Medienhost: Er legt nur einen Befehl in die Datenbank ab. Der Ingest holt genau dieses Medium (ein HTTPS-Abruf)
+  // und meldet das Ergebnis wie gewohnt per media_ready.
+  r.add('POST', '/api/media/:messageId/load', (c) => {
+    const id = c.params['messageId']!;
+    const st = getLoadState(app.db, id);
+    if (!st.exists) throw new HttpError(404, 'not_found');
+    if (!st.loadable) throw new HttpError(409, 'not_loadable');
+    if (!hasPendingLoad(app.db, id)) enqueueCommand(app.db, 'load_media', { messageId: id });
+    app.log.info('media_load_requested');
+    sendJson(c.res, 202, { ok: true });
+  });
+
   // GET /api/media/:messageId           -> Mediendatei (Range wird unterstuetzt)
   // GET /api/media/:messageId?thumb=1   -> Thumbnail (Ergaenzung zum Vertrag)
   r.add('GET', '/api/media/:messageId', async (c) => {
@@ -67,7 +81,8 @@ export function registerMediaRoutes(r: Router, app: App): void {
         disposition = 'inline';
       } else {
         contentType = 'application/octet-stream';
-        disposition = contentDisposition('attachment', path.basename(rel));
+        // Dokumente liegen als <Nachrichten-ID>__<Originalname> auf der Platte: den Namen ohne die ID anbieten.
+        disposition = contentDisposition('attachment', documentFileName(c.params['messageId']!, rel) ?? path.basename(rel));
       }
     }
 

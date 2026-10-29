@@ -232,7 +232,11 @@ export class EventPump {
             seenAt: m.seenAt,
             playedAt: m.playedAt,
             deleted: m.deleted,
+            deletedAt: m.deletedAt,
             edited: m.edited,
+            editedAt: m.editedAt,
+            editCount: m.editCount,
+            protectedAt: m.protectedAt,
             text: m.text,
           },
         };
@@ -249,6 +253,8 @@ export class EventPump {
             messageId: m.id,
             chatId: m.chatId,
             status: m.media.status,
+            skipReason: m.media.skipReason,
+            loadable: m.media.loadable,
             // Statt Dateisystempfaden: relative API-Pfade (siehe routes.md).
             ...(m.media.hasThumbnail ? { thumbnailPath: `api/media/${enc}?thumb=1` } : {}),
             ...(m.media.status === 'ready' ? { filePath: `api/media/${enc}` } : {}),

@@ -22,8 +22,10 @@ export interface DbClient {
   setSetting(db: Db, key: string, value: string): void;
   deleteExpired(
     db: Db,
-    cutoff: { messagesBefore: number; mediaBefore: number },
+    cutoff: { messagesBefore: number; mediaBefore: number; includeProtected?: boolean },
   ): { deletedMessageIds: string[]; mediaPathsToDelete: string[] };
+  setMessageProtected(db: Db, messageId: string, on: boolean, at?: number): boolean;
+  enqueueCommand(db: Db, type: string, payload: unknown): number;
   pushEvent(db: Db, type: string, payload: unknown): void;
   pullEventsSince(db: Db, lastId: number): { id: number; type: string; payload: unknown }[];
 }
@@ -36,6 +38,8 @@ const REQUIRED: (keyof DbClient)[] = [
   'getSetting',
   'setSetting',
   'deleteExpired',
+  'setMessageProtected',
+  'enqueueCommand',
   'pushEvent',
   'pullEventsSince',
 ];
@@ -99,8 +103,11 @@ export const getSetting = (db: Db, key: string): string | null => c().getSetting
 export const setSetting = (db: Db, key: string, value: string): void => c().setSetting(db, key, value);
 export const deleteExpired = (
   db: Db,
-  cutoff: { messagesBefore: number; mediaBefore: number },
+  cutoff: { messagesBefore: number; mediaBefore: number; includeProtected?: boolean },
 ): { deletedMessageIds: string[]; mediaPathsToDelete: string[] } => c().deleteExpired(db, cutoff);
+export const setMessageProtected = (db: Db, messageId: string, on: boolean, at?: number): boolean =>
+  c().setMessageProtected(db, messageId, on, at);
+export const enqueueCommand = (db: Db, type: string, payload: unknown): number => c().enqueueCommand(db, type, payload);
 export const pushEvent = (db: Db, type: string, payload: unknown): void => c().pushEvent(db, type, payload);
 export const pullEventsSince = (db: Db, lastId: number): { id: number; type: string; payload: unknown }[] =>
   c().pullEventsSince(db, lastId);

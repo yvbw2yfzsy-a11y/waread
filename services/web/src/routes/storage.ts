@@ -65,6 +65,8 @@ export function registerStorageRoutes(r: Router, app: App): void {
     }
     const limitMb = readSettings(app.db).storageLimitMb;
     sendJson(c.res, 200, {
+      protectedMessages: u.protectedMessages,
+      protectedMediaBytes: u.protectedMediaBytes,
       totalBytes: u.mediaBytes + dbBytes, // Mediendateien (Summe media.size_bytes, ohne Thumbnails) + DB inkl. WAL
       mediaBytes: u.mediaBytes,
       dbBytes,
@@ -89,24 +91,32 @@ export function registerStorageRoutes(r: Router, app: App): void {
       if (!chatExists(app.db, v)) throw new HttpError(404, 'chat_not_found');
       chatId = v;
     }
+    // Geschuetzte Nachrichten (Schild) bleiben stehen. Nur das Feld includeProtected mit genau dem Wert true gibt sie
+    // frei ("Speicher leeren (auch geschuetzte)"). Jeder andere Wert ausser einem Boolean ist ein Fehler.
+    const incRaw = body['includeProtected'];
+    if (incRaw !== undefined && typeof incRaw !== 'boolean') throw new HttpError(400, 'invalid_body', { field: 'includeProtected' });
+    const includeProtected = incRaw === true;
     if (clearing) throw new HttpError(409, 'clear_in_progress');
     clearing = true;
     try {
       let deletedMessages = 0;
       let paths: string[] = [];
+      let keptProtected = 0;
       if (scope === 'chat') {
-        const res = deleteChatData(app.db, chatId!);
+        const res = deleteChatData(app.db, chatId!, includeProtected);
         deletedMessages = res.deletedMessages;
         paths = res.mediaPaths;
+        keptProtected = res.keptProtected;
       } else {
         // "Alles aelter als unendlich" ueber den Vertrag: FTS-Index und Medienstatus bleiben konsistent.
         const everything = Number.MAX_SAFE_INTEGER;
         const res =
           scope === 'media'
-            ? deleteExpired(app.db, { messagesBefore: 0, mediaBefore: everything })
-            : deleteExpired(app.db, { messagesBefore: everything, mediaBefore: everything });
+            ? deleteExpired(app.db, { messagesBefore: 0, mediaBefore: everything, includeProtected })
+            : deleteExpired(app.db, { messagesBefore: everything, mediaBefore: everything, includeProtected });
         deletedMessages = res.deletedMessageIds.length;
         paths = res.mediaPathsToDelete;
+        keptProtected = includeProtected ? 0 : storageUsage(app.db).protectedMessages;
       }
       const files = await removeFiles(app.cfg.paths.mediaDir, paths);
       try {
@@ -123,8 +133,8 @@ export function registerStorageRoutes(r: Router, app: App): void {
           app.log.warn('identity_clear_command_failed', errFields(err));
         }
       }
-      app.log.info('storage_cleared', { scope, deletedMessages, deletedMedia: files.deleted });
-      sendJson(c.res, 200, { deletedMessages, deletedMedia: files.deleted, freedBytes: files.freedBytes });
+      app.log.info('storage_cleared', { scope, deletedMessages, deletedMedia: files.deleted, include_protected: includeProtected, kept_protected: keptProtected });
+      sendJson(c.res, 200, { deletedMessages, deletedMedia: files.deleted, freedBytes: files.freedBytes, keptProtected });
     } finally {
       clearing = false;
     }

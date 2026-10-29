@@ -170,7 +170,7 @@ function call(method, p, o = {}) {
       headers['content-length'] = Buffer.byteLength(payload);
     }
     if (o.cookie) headers['cookie'] = o.cookie;
-    const req = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers, agent: false }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {

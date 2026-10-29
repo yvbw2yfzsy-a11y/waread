@@ -116,7 +116,7 @@ const logs = [];
 const log = createLogger('debug', (l) => logs.push(l));
 const PORT = Number(process.env.SMOKE_PORT ?? 18787);
 const cfg = buildConfig({
-  web: { port: PORT, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session.key'), login_max_attempts: 5 },
+  web: { port: PORT, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session.key'), login_max_attempts: 5, hide_deleted_content: true },
   paths: { db: dbFile, media_dir: mediaDir },
 });
 const fakeVerifier = async (hash, pw) => { await sleep(5); return hash === '$argon2id$test' && pw === 'correct horse battery'; };
@@ -134,7 +134,7 @@ function call(method, p, o = {}, port = PORT) {
       headers['content-length'] = Buffer.byteLength(payload);
     }
     if (o.cookie) headers['cookie'] = o.cookie;
-    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers }, (res) => {
+    const req = http.request({ host: '127.0.0.1', port, path: p, method, headers, agent: false }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
@@ -259,7 +259,8 @@ setConn('needs_qr', undefined, 'ROHTEXT-AUS-BAILEYS');
 r = await call('GET', '/api/status', { cookie });
 ok('status needs_qr', r.json?.state === 'needs_qr' && r.json?.since === undefined, r.json);
 r = await call('GET', '/api/qr', { cookie });
-ok('qr Rohtext ohne qrcode-Paket -> 503 (erwartet in dieser Sandbox)', r.status === 503 && r.json?.error === 'qr_render_unavailable', [r.status, r.json]);
+// Ohne das Paket qrcode (Sandbox des Erstellers): 503. Mit dem Paket (normale Installation, npm ci): eine Daten-URL.
+ok('qr Rohtext: 503 ohne qrcode-Paket, sonst Daten-URL', (r.status === 503 && r.json?.error === 'qr_render_unavailable') || (r.status === 200 && r.json?.qr?.startsWith('data:image/svg+xml;base64,')), [r.status, r.json?.error]);
 client.setSetting(db, 'connection.qr', '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
 r = await call('GET', '/api/qr', { cookie });
 ok('qr SVG -> Daten-URL', r.status === 200 && r.json?.qr?.startsWith('data:image/svg+xml;base64,'), r.json);
@@ -520,7 +521,7 @@ pushEvent(db, 'qr', { qr: 'GEHEIMER-QR' }); // alte Konvention, wird nie weiterg
 pushEvent(db, 'message_updated', { messageId: 's1' });
 pushEvent(db, 'unbekannter_typ', { x: 1 });
 pushEvent(db, 'cleanup_done', { deletedMessages: 2, deletedMedia: 1, extra: 'x' });
-ok('SSE message_updated (Obermenge: seenAt, playedAt, deleted, edited, text)', await waitFor(() => /event: message_updated\ndata: \{"messageId":"s1","chatId":"[^"]+","seenAt":null,"playedAt":null,"deleted":false,"edited":false,"text":"Live Nachricht SEKRET"\}/.test(s1.data)), s1.data);
+ok('SSE message_updated (Obermenge: seenAt, playedAt, deleted, edited, text, deletedAt, editedAt, editCount, protectedAt)', await waitFor(() => /event: message_updated\ndata: \{"messageId":"s1","chatId":"[^"]+","seenAt":null,"playedAt":null,"deleted":false,"deletedAt":null,"edited":false,"editedAt":null,"editCount":0,"protectedAt":null,"text":"Live Nachricht SEKRET"\}/.test(s1.data)), s1.data);
 ok('SSE cleanup_done', await waitFor(() => /event: cleanup_done\ndata: \{"deletedMessages":2,"deletedMedia":1\}/.test(s1.data)), s1.data);
 ok('SSE leitet qr NIE weiter', !s1.data.includes('GEHEIMER-QR') && !/event: qr/.test(s1.data));
 ok('SSE leitet unbekannte Typen nicht weiter', !/unbekannter_typ/.test(s1.data));
@@ -593,6 +594,119 @@ ok('clear all', r.status === 200 && r.json.deletedMessages > 0 && db.prepare('SE
 ok('F14: "alles" beauftragt den Ingest, Namen und Nummernzuordnung zu leeren', stateCmd() === 'clear_identity', stateCmd());
 r = await call('GET', '/api/chats', { cookie });
 ok('Chats nach clear all leer', r.status === 200 && r.json.length === 0);
+
+// -- Version 2: Zitate, Versionen, Loeschmarke, Schild, "Jetzt laden", Stumm, Dokumentname, Speicher leeren mit/ohne geschuetzte
+{
+  const T2 = 1_700_001_000;
+  client.upsertChat(db, { id: A, name: 'Anna', isGroup: false, lastActivityAt: T2 });
+  const mk = (id, ts, o = {}) => client.insertMessageIfNotExists(db, {
+    id, chatId: A, sender: o.sender ?? 'Anna', waTimestamp: ts, receivedAt: ts, direction: o.dir ?? 'in', type: o.type ?? 'text',
+    text: o.text ?? ('t ' + id), ...(o.replyTo ? { replyTo: o.replyTo } : {}), ...(o.replyText ? { replyText: o.replyText } : {}),
+    ...(o.replySender ? { replySender: o.replySender } : {}), ...(o.replyType ? { replyType: o.replyType } : {}),
+  });
+  mk('v1', T2 + 1, { text: 'Wann kommst du?' });
+  mk('v2', T2 + 2, { text: 'Gegen sechs', dir: 'out', sender: 'Ich', replyTo: 'v1' });
+  mk('v3', T2 + 3, { text: 'Antwort auf Verschwundenes', replyTo: 'weg', replyText: 'Ursprung', replySender: 'Bert', replyType: 'text' });
+  mk('v4', T2 + 4, { type: 'video', text: 'Konzert' });
+  client.setMediaStatus(db, 'v4', { status: 'expired', mimeType: 'video/mp4', sizeBytes: 38_000_000, skipReason: 'rule_off', loadable: true });
+  mk('D1', T2 + 5, { type: 'document', text: 'Rechnung' });
+  fs.mkdirSync(path.join(mediaDir, 'A/2023-11-14'), { recursive: true }); // der frühere clear hat leere Ordner entfernt
+  fs.writeFileSync(path.join(mediaDir, 'A/2023-11-14/D1__Rechnung März.pdf'), Buffer.from('%PDF-1.4 x'));
+  client.setMediaStatus(db, 'D1', { status: 'ready', filePath: 'A/2023-11-14/D1__Rechnung März.pdf', mimeType: 'application/pdf', sizeBytes: 10 });
+  mk('v5', T2 + 6, { type: 'voice', text: undefined });
+  client.setMediaStatus(db, 'v5', { status: 'ready', filePath: 'A/2023-11-14/a4.m4a', mimeType: 'audio/mp4', sizeBytes: 1000, durationSeconds: 63 });
+
+  r = await call('GET', mp(A), { cookie });
+  const m = Object.fromEntries(r.json.map((x) => [x.id, x]));
+  ok('V2 Zitat mit vorhandenem Original: Text, Absender, fromMe', m.v2.quoted?.available === true && m.v2.quoted.text === 'Wann kommst du?' && m.v2.quoted.sender === 'Anna' && m.v2.quoted.fromMe === false && m.v2.quoted.id === 'v1', m.v2.quoted);
+  ok('V2 Zitat ohne Original: Kurzzitat aus der Antwort', m.v3.quoted?.available === false && m.v3.quoted.text === 'Ursprung' && m.v3.quoted.sender === 'Bert' && m.v3.quoted.type === 'text', m.v3.quoted);
+  ok('V2 keine Antwort -> quoted null', m.v1.quoted === null && m.v1.editCount === 0 && m.v1.protectedAt === null && m.v1.viewOnce === false);
+  ok('V2 media: skipReason und loadable', m.v4.media.skipReason === 'rule_off' && m.v4.media.loadable === true && m.v5.media.loadable === false, m.v4.media);
+  ok('V2 Dokument: Dateiname ohne Nachrichten-ID', m.D1.media.fileName === 'Rechnung März.pdf', m.D1.media);
+  r = await media('D1');
+  const cd = r.headers['content-disposition'] ?? '';
+  ok('V2 Dokument-Download: Dateiname ohne ID im Header', r.status === 200 && cd.includes('Rechnung%20M%C3%A4rz.pdf') && !cd.includes('D1__'), cd);
+
+  // Chatliste: Dauer, Absender, stumm
+  r = await call('GET', '/api/chats', { cookie });
+  const ca = r.json.find((c) => c.id === A);
+  ok('V2 Chatliste: Dauer der letzten Sprachnachricht und Absender', ca.lastMessageType === 'voice' && ca.lastMessageDurationSeconds === 63 && ca.lastMessageSender === 'Anna' && ca.muted === false, ca);
+  r = await call('PUT', `/api/chats/${encodeURIComponent(A)}/mute`, { cookie, body: { muted: 'ja' } });
+  ok('V2 mute: kein Boolean -> 400', r.status === 400, r.status);
+  r = await call('PUT', '/api/chats/nope/mute', { cookie, body: { muted: true } });
+  ok('V2 mute: unbekannter Chat -> 404', r.status === 404, r.status);
+  r = await call('PUT', `/api/chats/${encodeURIComponent(A)}/mute`, { cookie, body: { muted: true } });
+  ok('V2 mute an', r.status === 200 && r.json.muted === true);
+  r = await call('GET', '/api/chats', { cookie });
+  ok('V2 Chatliste zeigt muted', r.json.find((c) => c.id === A).muted === true);
+  r = await call('PUT', `/api/chats/${encodeURIComponent(A)}/mute`, { cookie, body: { muted: false } });
+  r = await call('GET', '/api/chats', { cookie });
+  ok('V2 mute wieder aus', r.json.find((c) => c.id === A).muted === false && client.getSetting(db, 'chat.muted') === '[]', client.getSetting(db, 'chat.muted'));
+
+  // Bearbeitungsverlauf
+  client.applyMessageEdit(db, 'v1', 'Wann kommst du heute?', T2 + 100);
+  r = await call('GET', '/api/messages/v1/versions', { cookie });
+  ok('V2 versions: aktuelle und fruehere Fassung', r.status === 200 && r.json.current.text === 'Wann kommst du heute?' && r.json.current.editedAt === T2 + 100 && r.json.versions.length === 1 && r.json.versions[0].text === 'Wann kommst du?' && r.json.versions[0].replacedAt === T2 + 100, r.json);
+  r = await call('GET', '/api/messages/unbekannt/versions', { cookie });
+  ok('V2 versions: unbekannte Nachricht -> 404', r.status === 404);
+  r = await call('GET', mp(A), { cookie });
+  ok('V2 Nachricht zeigt edited, editedAt, editCount', r.json.find((x) => x.id === 'v1').edited === true && r.json.find((x) => x.id === 'v1').editCount === 1 && r.json.find((x) => x.id === 'v1').editedAt === T2 + 100);
+
+  // Loeschmarke: Standard (Inhalt zeigen) und hide_deleted_content = true (Hauptinstanz)
+  client.markMessageDeleted(db, 'v3', T2 + 200);
+  const cfg3 = buildConfig({ web: { port: PORT + 2, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session3.key') }, paths: { db: dbFile, media_dir: mediaDir } });
+  ok('V2 Standard: hide_deleted_content ist aus', cfg3.web.hideDeletedContent === false);
+  const app3 = createApp({ cfg: cfg3, db, log: createLogger('error', () => {}), verifier: fakeVerifier });
+  await app3.listen();
+  const l3 = await call('POST', '/api/login', { headers: { 'x-forwarded-for': '10.7.7.7' }, body: { password: 'correct horse battery' } }, PORT + 2);
+  const cookie3 = (l3.headers['set-cookie']?.[0] ?? '').split(';')[0];
+  r = await call('GET', mp(A), { cookie: cookie3 }, PORT + 2);
+  const d3 = r.json.find((x) => x.id === 'v3');
+  ok('V2 geloeschte Nachricht (Standard): Text bleibt, deleted und deletedAt gesetzt', d3.deleted === true && d3.text === 'Antwort auf Verschwundenes' && d3.deletedAt === T2 + 200, d3);
+  r = await call('GET', mp(A), { cookie });
+  ok('V2 geloeschte Nachricht (hide=true): Text verborgen, Zeitpunkt sichtbar', r.json.find((x) => x.id === 'v3').text === null && r.json.find((x) => x.id === 'v3').deletedAt === T2 + 200);
+  await app3.close();
+
+  // Schild und "Jetzt laden"
+  r = await call('POST', '/api/messages/v1/protect', { cookie, body: { protected: 'ja' } });
+  ok('V2 protect: kein Boolean -> 400', r.status === 400, r.status);
+  r = await call('POST', '/api/messages/unbekannt/protect', { cookie, body: { protected: true } });
+  ok('V2 protect: unbekannte Nachricht -> 404', r.status === 404);
+  r = await call('POST', '/api/messages/v1/protect', { cookie, body: { protected: true } });
+  ok('V2 protect an: protectedAt gesetzt, nichts zu laden', r.status === 200 && typeof r.json.protectedAt === 'number' && r.json.loading === false, r.json);
+  const cmds = () => db.prepare("SELECT payload_json FROM ingest_commands WHERE type = 'load_media'").all().map((x) => JSON.parse(x.payload_json).messageId);
+  ok('V2 protect an ohne ladbares Medium legt keinen Befehl an', cmds().length === 0, cmds());
+  r = await call('POST', '/api/messages/v4/protect', { cookie, body: { protected: true } });
+  ok('V2 protect an Nachricht mit ladbarem Medium: beauftragt den Ingest', r.status === 200 && r.json.loading === true && cmds().join() === 'v4', [r.json, cmds()]);
+  r = await call('POST', '/api/media/v4/load', { cookie });
+  ok('V2 load: 202, kein zweiter Befehl fuer dieselbe Nachricht', r.status === 202 && cmds().join() === 'v4', cmds());
+  r = await call('POST', '/api/media/v5/load', { cookie });
+  ok('V2 load: Medium nicht ladbar -> 409', r.status === 409 && r.json?.error === 'not_loadable', r.json);
+  r = await call('POST', '/api/media/unbekannt/load', { cookie });
+  ok('V2 load: unbekannt -> 404', r.status === 404);
+  r = await call('POST', '/api/media/v4/load');
+  ok('V2 load ohne Session -> 401', r.status === 401);
+  ok('V2 SSE-Quelle: message_updated fuer protect geschrieben', db.prepare("SELECT COUNT(*) AS n FROM events_outbox WHERE type = 'message_updated' AND payload_json LIKE '%\"v1\"%'").get().n >= 1);
+
+  // Speicher leeren: geschuetzte bleiben, nur includeProtected === true loescht sie
+  r = await call('GET', '/api/storage/usage', { cookie });
+  ok('V2 usage: geschuetzte Nachrichten gezaehlt', r.json.protectedMessages === 2 && typeof r.json.protectedMediaBytes === 'number', [r.json.protectedMessages, r.json.protectedMediaBytes]);
+  r = await clear({ scope: 'all', confirm: true, includeProtected: 'true' });
+  ok('V2 clear: includeProtected als String -> 400', r.status === 400 && r.json?.error === 'invalid_body', r.json);
+  r = await clear({ scope: 'all', confirm: true, includeProtected: 1 });
+  ok('V2 clear: includeProtected=1 -> 400', r.status === 400);
+  const before = db.prepare('SELECT COUNT(*) AS n FROM messages').get().n;
+  r = await clear({ scope: 'all', confirm: true });
+  ok('V2 clear all ohne includeProtected: geschuetzte bleiben samt Versionen', r.status === 200 && r.json.keptProtected === 2 && db.prepare('SELECT COUNT(*) AS n FROM messages').get().n === 2 && db.prepare('SELECT COUNT(*) AS n FROM message_versions').get().n === 1, [r.json, before]);
+  r = await clear({ scope: 'chat', chatId: A, confirm: true, includeProtected: false });
+  ok('V2 clear chat mit includeProtected=false: geschuetzte bleiben', r.status === 200 && r.json.deletedMessages === 0 && r.json.keptProtected === 2, r.json);
+  r = await clear({ scope: 'media', confirm: true });
+  ok('V2 clear media: geschuetztes Medium bleibt', db.prepare("SELECT COUNT(*) AS n FROM messages WHERE protected_at IS NOT NULL").get().n === 2, r.json);
+  r = await clear({ scope: 'all', confirm: true, includeProtected: true });
+  ok('V2 clear all mit includeProtected=true: alles weg, auch Versionen und Suchindex', r.status === 200 && r.json.keptProtected === 0 && db.prepare('SELECT COUNT(*) AS n FROM messages').get().n === 0 && db.prepare('SELECT COUNT(*) AS n FROM message_versions').get().n === 0 && db.prepare('SELECT COUNT(*) AS n FROM messages_fts').get().n === 0, r.json);
+  r = await call('GET', '/api/chats', { cookie });
+  ok('V2 Chats danach leer', r.json.length === 0);
+}
 
 // -- Statische Dateien
 r = await call('GET', '/');
