@@ -62,6 +62,14 @@ export interface IngestConfig {
     convertVoice: boolean
     ffmpegPath: string
     ffmpegTimeoutMs: number
+    /**
+     * Einmal-Ansehen-Medien (Foto, Video, Sprachnachricht) wie normale Medien speichern. Ab Werk aus: Sie
+     * sind fuer "einmal" gedacht, und ob WhatsApp den Schluessel an verknuepfte Geraete liefert, ist
+     * ungeprueft. Bei "aus" schreibt der Ingest nur ein Ja/Nein-Protokoll (viewonce_probe).
+     */
+    storeViewOnce: boolean
+    /** Groesstes Medium, das "Medium jetzt laden" noch holt (ueber die Regel-Grenzen hinaus). */
+    forceMaxBytes: number
   }
   connection: {
     backoffStartMs: number
@@ -104,6 +112,8 @@ export function defaultConfig(): IngestConfig {
       convertVoice: true,
       ffmpegPath: 'ffmpeg',
       ffmpegTimeoutMs: 60_000,
+      storeViewOnce: false,
+      forceMaxBytes: 500 * MB,
     },
     connection: {
       backoffStartMs: 5_000,
@@ -220,6 +230,8 @@ export function loadConfig(opts: LoadConfigOptions = {}): IngestConfig {
   m.convertVoice = pickBool(ing, 'convert_voice', m.convertVoice)
   m.ffmpegPath = pickStr(ing, 'ffmpeg_path', m.ffmpegPath)
   m.ffmpegTimeoutMs = pickNum(ing, 'ffmpeg_timeout_seconds', m.ffmpegTimeoutMs / 1000, 5, 600) * 1000
+  m.storeViewOnce = pickBool(ing, 'store_view_once', m.storeViewOnce)
+  m.forceMaxBytes = Math.floor(pickNum(ing, 'max_mb_forced', m.forceMaxBytes / MB, 1, 2048) * MB)
 
   const c = cfg.connection
   c.backoffStartMs = pickNum(ing, 'backoff_start_seconds', c.backoffStartMs / 1000, 1, 600) * 1000

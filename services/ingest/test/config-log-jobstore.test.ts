@@ -221,7 +221,7 @@ describe('JobStore', () => {
     store.upsertJob(job('a', 999), 2000) // zweites Einreihen aendert nichts
     assert.equal(store.countJobs(), 2)
     assert.deepEqual(store.listJobs().map((j) => j.messageId), ['b', 'a'])
-    assert.deepEqual(store.getJob('a'), { ...job('a', 100), attempts: 0, nextAttemptAt: 0, createdAt: 1000 })
+    assert.deepEqual(store.getJob('a'), { ...job('a', 100), attempts: 0, nextAttemptAt: 0, createdAt: 1000, forced: false })
     store.recordAttempt('a', 2, 5000)
     assert.equal(store.getJob('a')?.attempts, 2)
     assert.equal(store.getJob('a')?.nextAttemptAt, 5000)

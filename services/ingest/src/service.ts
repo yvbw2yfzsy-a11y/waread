@@ -4,6 +4,7 @@
  */
 import type { AuthStore } from './authStore.js'
 import type { IngestConfig } from './config.js'
+import { IngestCommands } from './commands.js'
 import { ConnectionManager } from './connection.js'
 import type { Database } from './dbClient.js'
 import type { JobStore } from './jobStore.js'
@@ -82,6 +83,8 @@ export function createService(d: ServiceDeps): Service {
     },
     listeners: {
       'messages.upsert': (arg) => h.handleUpsert(arg),
+      // "fuer alle geloescht" und Bearbeitungen: lokal aus ohnehin empfangenen Nachrichten, keine Anfrage an WhatsApp.
+      'messages.update': (arg) => h.handleUpdates(arg),
       'messaging-history.set': (arg) => {
         h.handleHistory(arg).catch((err) => log.error('history_failed', errorFields(err)))
       },
@@ -104,6 +107,15 @@ export function createService(d: ServiceDeps): Service {
     ...(d.scheduler ? { scheduler: d.scheduler } : {}),
   })
 
+  // Befehle des Web an die Medien-Warteschlange ("Medium jetzt laden") und Aufraeumen zurueckgestellter Schluessel.
+  const commands = new IngestCommands({
+    db,
+    queue,
+    log,
+    pollMs: cfg.connection.commandPollMs,
+    ...(d.scheduler ? { scheduler: d.scheduler } : {}),
+  })
+
   return {
     conn,
     queue,
@@ -112,9 +124,11 @@ export function createService(d: ServiceDeps): Service {
       queue.recover()
       queue.start()
       stateCommands.start() // vor dem Verbindungsaufbau: ein wartender Befehl wirkt, bevor neue Namen eintreffen
+      commands.start()
       conn.start()
     },
     async stop() {
+      commands.stop()
       stateCommands.stop()
       await conn.stop()
       h.flushPending() // F02: wartende Nachrichten ein letztes Mal speichern

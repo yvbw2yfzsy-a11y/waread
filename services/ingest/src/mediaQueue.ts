@@ -26,12 +26,15 @@ import { pipeline } from 'node:stream/promises'
 import type { IngestConfig, MediaKind } from './config.js'
 import {
   ensureMediaRow,
+  isMessageProtected,
+  listLoadableMediaIds,
   listMediaIdsByStatus,
   messageExists,
   pushEvent,
   setMediaStatus,
   type Database,
   type MediaStatus,
+  type SkipReason,
 } from './dbClient.js'
 import type { EnqueueResult } from './messageHandler.js'
 import { DownloadPolicy } from './downloadPolicy.js'
@@ -42,6 +45,9 @@ import { mimeForFormat } from './media/thumbnail.js'
 import { nowSec } from './sqlite.js'
 import { nextBackoffMs, realScheduler, statusCodeOf, type Scheduler } from './timing.js'
 import { DownloadTargetError, type DownloadTarget } from './waLib.js'
+
+/** Ergebnis von "Medium jetzt laden" (Befehl des Web-Dienstes). */
+export type LoadResult = 'queued' | 'duplicate' | 'no_keys' | 'gone' | 'retention' | 'too_large' | 'queue_full'
 
 export interface QueueDeps {
   db: Database
@@ -248,7 +254,7 @@ export class MediaQueue {
         this.jobs.deleteJob(job.messageId)
         continue
       }
-      if (this.deps.isExpired(job.waTimestamp)) {
+      if (this.deps.isExpired(job.waTimestamp) && !isMessageProtected(this.db, job.messageId)) {
         this.finish(job, 'expired', 'retention')
         expired++
         continue
@@ -276,21 +282,22 @@ export class MediaQueue {
     const m = this.cfg.media
     const rule = this.policy.get(job.kind)
     if (!rule.auto) {
-      // Download-Regel "aus": Nachricht bleibt, die Datei wird nicht geladen. Das Schema kennt keinen
-      // eigenen Status dafuer; 'expired' (= keine Datei vorhanden) verhindert ein ewiges "wird geladen".
-      this.safeStatus(job.messageId, { status: 'expired' })
+      // Download-Regel "aus": Nachricht bleibt, die Datei wird nicht geladen. Das Schema kennt keinen eigenen
+      // Status dafuer; 'expired' (= keine Datei vorhanden) verhindert ein ewiges "wird geladen". Der Grund steht
+      // in media.skip_reason, und die Schluessel bleiben fuer "Medium jetzt laden" im privaten Speicher.
+      this.defer(job, 'expired', 'rule_off')
       this.emit(job.messageId, 'expired')
       return 'disabled'
     }
     const declared = job.descriptor.fileLength
     if (declared !== null && declared > rule.maxBytes) {
-      this.safeStatus(job.messageId, { status: 'failed' })
+      this.defer(job, 'failed', 'too_large')
       this.emit(job.messageId, 'failed')
       return 'too_large'
     }
     if (this.waiting.has(job.messageId) || this.active.has(job.messageId)) return 'duplicate'
     if (this.waiting.size + this.active.size >= m.maxQueueLength) {
-      this.safeStatus(job.messageId, { status: 'failed' })
+      this.defer(job, 'failed', 'queue_full')
       this.emit(job.messageId, 'failed')
       return 'queue_full'
     }
@@ -298,6 +305,97 @@ export class MediaQueue {
     this.waiting.set(job.messageId, 0)
     this.pump()
     return 'queued'
+  }
+
+  /**
+   * Merkt ein nicht geladenes Medium vor: Status und Grund in der Datenbank, Schluessel im privaten Speicher.
+   * Ist es groesser als das feste Hoechstmass oder lassen sich die Schluessel nicht ablegen, bleibt es nicht ladbar.
+   */
+  private defer(job: NewMediaJob, status: 'failed' | 'expired', reason: SkipReason): void {
+    const declared = job.descriptor.fileLength
+    let loadable = !(declared !== null && declared > this.cfg.media.forceMaxBytes)
+    if (loadable) {
+      try {
+        this.jobs.upsertDeferred(job, this.now())
+      } catch (err) {
+        loadable = false
+        this.log.warn('deferred_store_failed', { msg_id: job.messageId, ...errorFields(err) })
+      }
+    }
+    this.safeStatus(job.messageId, { status, skipReason: reason, loadable })
+  }
+
+  /**
+   * "Medium jetzt laden": holt ein zurueckgestelltes Medium ausdruecklich. Gilt nur fuer vorhandene Nachrichten
+   * innerhalb der Medien-Aufbewahrung (geschuetzte Nachrichten ausgenommen). Ein einziger HTTPS-Abruf an den
+   * Medienhost, kein Knoten an WhatsApp.
+   */
+  loadDeferred(messageId: string): LoadResult {
+    if (!messageExists(this.db, messageId)) {
+      this.jobs.deleteDeferred(messageId)
+      return 'gone'
+    }
+    if (this.waiting.has(messageId) || this.active.has(messageId)) return 'duplicate'
+    const d = this.jobs.getDeferred(messageId)
+    if (!d) {
+      this.safeStatus(messageId, { loadable: false })
+      this.emit(messageId, 'expired')
+      return 'no_keys'
+    }
+    if (this.deps.isExpired(d.waTimestamp) && !isMessageProtected(this.db, messageId)) {
+      this.safeStatus(messageId, { status: 'expired', skipReason: 'retention', loadable: false })
+      this.jobs.deleteDeferred(messageId)
+      this.emit(messageId, 'expired')
+      return 'retention'
+    }
+    const declared = d.descriptor.fileLength
+    if (declared !== null && declared > this.cfg.media.forceMaxBytes) {
+      this.safeStatus(messageId, { status: 'failed', skipReason: 'too_large', loadable: false })
+      this.jobs.deleteDeferred(messageId)
+      this.emit(messageId, 'failed')
+      return 'too_large'
+    }
+    if (this.waiting.size + this.active.size >= this.cfg.media.maxQueueLength) return 'queue_full'
+    this.jobs.upsertJob(
+      { messageId: d.messageId, chatId: d.chatId, kind: d.kind, descriptor: d.descriptor, waTimestamp: d.waTimestamp, forced: true },
+      this.now(),
+    )
+    this.jobs.deleteDeferred(messageId)
+    this.safeStatus(messageId, { status: 'pending', skipReason: null, loadable: false })
+    this.emit(messageId, 'pending')
+    this.waiting.set(messageId, 0)
+    this.pump()
+    return 'queued'
+  }
+
+  /**
+   * Raeumt zurueckgestellte Schluessel auf: Nachricht weg oder Medien-Aufbewahrung abgelaufen (geschuetzte
+   * Nachrichten ausgenommen) -> Schluessel loeschen. Medien-Zeilen mit loadable=1, zu denen keine Schluessel
+   * (mehr) existieren, werden auf loadable=0 gesetzt. Gibt die Zahl der geloeschten Schluessel zurueck.
+   */
+  purgeDeferred(): number {
+    let removed = 0
+    const kept = new Set<string>()
+    for (const { messageId, waTimestamp } of this.jobs.listDeferredIds()) {
+      const exists = messageExists(this.db, messageId)
+      const keep = exists && (isMessageProtected(this.db, messageId) || !this.deps.isExpired(waTimestamp))
+      if (keep) {
+        kept.add(messageId)
+        continue
+      }
+      this.jobs.deleteDeferred(messageId)
+      removed++
+      if (exists) {
+        this.safeStatus(messageId, { status: 'expired', skipReason: 'retention', loadable: false })
+        this.emit(messageId, 'expired')
+      }
+    }
+    for (const id of listLoadableMediaIds(this.db)) {
+      if (kept.has(id) || this.waiting.has(id) || this.active.has(id)) continue
+      this.safeStatus(id, { loadable: false })
+      this.emit(id, 'expired')
+    }
+    return removed
   }
 
   // --- Planung --------------------------------------------------------------------------------
@@ -360,7 +458,7 @@ export class MediaQueue {
       this.jobs.deleteJob(id) // Cleanup hat die Nachricht inzwischen geloescht
       return
     }
-    if (this.deps.isExpired(job.waTimestamp)) {
+    if (this.deps.isExpired(job.waTimestamp) && !isMessageProtected(this.db, id)) {
       this.finish(job, 'expired', 'retention')
       return
     }
@@ -371,7 +469,7 @@ export class MediaQueue {
 
     try {
       const result = await this.fetchAndStore(job)
-      if (!this.safeStatus(id, { status: 'ready', ...result })) {
+      if (!this.safeStatus(id, { status: 'ready', skipReason: null, loadable: false, ...result })) {
         // Nachricht wurde waehrenddessen geloescht -> Dateien wieder entfernen.
         await this.removeFiles(result.filePath, result.thumbnailPath)
         this.jobs.deleteJob(id)
@@ -400,7 +498,29 @@ export class MediaQueue {
   }
 
   private finish(job: MediaJob, status: 'failed' | 'expired', code: string, attempt?: number): void {
-    this.safeStatus(job.messageId, { status })
+    // Grund und "ladbar" festhalten: nach Ablauf der Aufbewahrung oder abgelaufenem Link gibt es nichts mehr zu holen.
+    // Gescheiterte Abrufe (Netz, Pruefsumme, Groesse) lassen sich auf Wunsch wiederholen, abgewiesene Ziele und
+    // fehlende Schluessel nie. Ein zu grosses Medium gilt nur dann als ladbar, wenn es nicht schon erzwungen war.
+    let skip: SkipReason
+    let loadable = false
+    if (status === 'expired') {
+      skip = code === 'retention' ? 'retention' : 'link_expired'
+    } else if (code === 'too_large') {
+      skip = 'too_large'
+      loadable = job.forced !== true
+    } else {
+      skip = 'failed'
+      loadable = code !== 'no_key' && code !== 'bad_target'
+    }
+    if (loadable) {
+      try {
+        this.jobs.upsertDeferred(job)
+      } catch (err) {
+        loadable = false
+        this.log.warn('deferred_store_failed', { msg_id: job.messageId, ...errorFields(err) })
+      }
+    }
+    this.safeStatus(job.messageId, { status, skipReason: skip, loadable })
     this.jobs.deleteJob(job.messageId)
     this.emit(job.messageId, status)
     this.log.warn('media_final', { msg_id: job.messageId, status, code, attempt: attempt ?? null, kind: job.kind })
@@ -497,7 +617,9 @@ export class MediaQueue {
   private async downloadTo(job: MediaJob, finalPath: string): Promise<void> {
     const d = job.descriptor
     const m = this.cfg.media
-    const limit = this.policy.get(job.kind).maxBytes
+    const policyLimit = this.policy.get(job.kind).maxBytes
+    // Ausdrueckliche Anforderung ("Medium jetzt laden"): das feste Hoechstmass statt der Grenze aus der Download-Regel.
+    const limit = job.forced ? Math.max(policyLimit, m.forceMaxBytes) : policyLimit
     const part = `${finalPath}.part`
     const hash = createHash('sha256')
     let bytes = 0

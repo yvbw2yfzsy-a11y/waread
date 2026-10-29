@@ -6,6 +6,7 @@ import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import sharp from 'sharp'
 import { openAuthStore, type AuthStore } from '../src/authStore.js'
+import { enqueueCommand } from '@waread/db'
 import { getSetting, setSetting } from '../src/dbClient.js'
 import { createService, type Service } from '../src/service.js'
 import type { DownloadTarget } from '../src/waLib.js'
@@ -113,6 +114,67 @@ describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => 
     assert.ok(types.includes('media_ready'))
   })
 
+  it('messages.update: "fuer alle geloescht" und Bearbeitung kommen an, ohne dass etwas ausgesendet wird', async () => {
+    service.start()
+    const sock = lib.last
+    sock.emit('connection.update', { connection: 'open' })
+    sock.emit('messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { id: 'U1', remoteJid: PN }, messageTimestamp: now(), pushName: 'Anna', message: { conversation: 'vorher' } }],
+    })
+    sock.emit('messages.update', [
+      { key: { id: 'U1', remoteJid: PN }, update: { message: { editedMessage: { message: { conversation: 'nachher' } } }, messageTimestamp: now() } },
+    ])
+    sock.emit('messages.update', [{ key: { id: 'U1', remoteJid: PN }, update: { message: null, messageStubType: 1 } }])
+    assert.deepEqual(
+      one(env.db, 'SELECT text, edited, deleted FROM messages WHERE id = ?', 'U1'),
+      { text: 'nachher', edited: 1, deleted: 1 },
+    )
+    assert.equal(one(env.db, 'SELECT text FROM message_versions WHERE message_id = ?', 'U1').text, 'vorher')
+    const updated = all(env.db, "SELECT 1 FROM events_outbox WHERE type = 'message_updated'")
+    assert.equal(updated.length, 2)
+  })
+
+  it('"Medium jetzt laden": Video ohne Auto-Download wird nur zurueckgestellt, auf Befehl des Web geladen und ist dann fertig', async () => {
+    service.start()
+    const sock = lib.last
+    sock.emit('connection.update', { connection: 'open' })
+    const video = Buffer.from('v'.repeat(300))
+    payloads.set('schluessel-v', video)
+    sock.emit('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'V1', remoteJid: PN },
+          messageTimestamp: now(),
+          pushName: 'Anna',
+          message: {
+            videoMessage: {
+              mimetype: 'video/mp4',
+              mediaKey: Buffer.from('schluessel-v'),
+              fileSha256: createHash('sha256').update(video).digest(),
+              fileLength: video.length,
+              directPath: '/d',
+              seconds: 4,
+            },
+          },
+        },
+      ],
+    })
+    assert.deepEqual(one(env.db, 'SELECT status, skip_reason, loadable FROM media WHERE message_id = ?', 'V1'), {
+      status: 'expired',
+      skip_reason: 'rule_off',
+      loadable: 1,
+    })
+    assert.equal(lib.unexpectedCalls.length, 0)
+    // Der Web-Dienst legt den Befehl ab, der Ingest fuehrt ihn beim naechsten Takt aus.
+    enqueueCommand(env.db, 'load_media', { messageId: 'V1' })
+    await until(() => status('V1') === 'ready', 8000)
+    assert.deepEqual(one(env.db, 'SELECT skip_reason, loadable FROM media WHERE message_id = ?', 'V1'), { skip_reason: null, loadable: 0 })
+    assert.equal(all(env.db, 'SELECT 1 FROM ingest_commands').length, 0)
+    assert.equal(env.jobs.countDeferred(), 0)
+  })
+
   it('abgemeldet: Sitzung weg, Status needs_qr, keine Wiederverbindung ohne Befehl', async () => {
     service.start()
     const sock = lib.last
@@ -163,6 +225,7 @@ describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => 
       'groups.update',
       'groups.upsert',
       'lid-mapping.update',
+      'messages.update',
       'messages.upsert',
       'messaging-history.set',
     ])

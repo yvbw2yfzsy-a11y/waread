@@ -163,11 +163,14 @@ describe('normalizeMessage: Medien', () => {
   it('Einmal-Ansehen: kein Medium, nur Hinweis', () => {
     const a = msgOf(raw({ viewOnceMessageV2: { message: { imageMessage: { mediaKey: key, caption: 'geheim' } } } }))
     assert.equal(a.type, 'system')
-    assert.equal(a.text, PLACEHOLDER.viewOnce)
+    assert.equal(a.text, PLACEHOLDER.viewOnceKind.image)
+    assert.equal(a.viewOnce, true)
     assert.equal(a.media, undefined)
     const b = msgOf(raw({ imageMessage: { mediaKey: key, viewOnce: true } }))
     assert.equal(b.type, 'system')
     assert.equal(b.media, undefined)
+    const c = msgOf(raw({ viewOnceMessageV2: { message: { extendedTextMessage: { text: 'x' } } } }))
+    assert.equal(c.text, PLACEHOLDER.viewOnce, 'unbekannte Art: allgemeiner Hinweis')
   })
 
   it('fehlender Medienschluessel ergibt leeren Schluessel im Deskriptor (die Warteschlange meldet no_key)', () => {

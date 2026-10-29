@@ -6,14 +6,17 @@
  */
 import { SETTING_KEYS, type IngestConfig, type MediaKind } from './config.js'
 import {
+  applyMessageEdit,
   ensureMediaRow,
   getSetting,
   insertMessageIfNotExists,
+  markMessageDeleted,
   pushEvent,
   setMediaStatus,
   upsertChat,
   type Database,
   type MessageType,
+  type SkipReason,
 } from './dbClient.js'
 import { NAME_RANK, type JobStore, type MediaDescriptor, type NewMediaJob } from './jobStore.js'
 import { errorFields, type Logger } from './log.js'
@@ -109,6 +112,21 @@ function toBase64(v: unknown): string | null {
 export interface NormEnv {
   pnForLid(lid: string): string | undefined
   nameOf(jid: string): string | undefined
+  /** Einmal-Ansehen-Medien wie normale Medien speichern (Standard aus, siehe config store_view_once). */
+  storeViewOnce?: boolean
+}
+
+/**
+ * Nur Ja/Nein-Angaben zu einer Einmal-Ansehen-Nachricht, nie Inhalte oder Schluessel. Sie dienen dem Journal
+ * (viewonce_probe), damit sich ohne Zweitnummer feststellen laesst, ob WhatsApp die Schluessel an dieses
+ * verknuepfte Geraet liefert.
+ */
+export interface ViewOnceProbe {
+  kind: 'image' | 'video' | 'voice' | 'other'
+  hasKey: boolean
+  hasDirectPath: boolean
+  hasUrl: boolean
+  hasSha: boolean
 }
 
 export interface NormalizedMedia {
@@ -133,6 +151,13 @@ export interface NormalizedMessage {
   replyTo?: string
   pushName?: string
   media?: NormalizedMedia
+  /** Einmal-Ansehen-Nachricht (gespeichert oder nur als Hinweis). */
+  viewOnce?: boolean
+  viewOnceProbe?: ViewOnceProbe
+  /** Kurzzitat der Nachricht, auf die geantwortet wurde. */
+  replyText?: string
+  replySender?: string
+  replyType?: string
 }
 
 export type NormalizeResult =
@@ -142,6 +167,11 @@ export type NormalizeResult =
 /** Platzhaltertexte fuer Nachrichten ohne darstellbaren Inhalt (Anzeigesprache: Deutsch). */
 export const PLACEHOLDER = {
   viewOnce: 'Einmal-Ansehen-Medium (nicht gespeichert)',
+  viewOnceKind: {
+    image: 'Einmal-Foto (nicht gespeichert)',
+    video: 'Einmal-Video (nicht gespeichert)',
+    voice: 'Einmal-Sprachnachricht (nicht gespeichert)',
+  },
   unsupported: 'Nicht unterstützter Nachrichtentyp',
 } as const
 
@@ -221,6 +251,81 @@ function describeContacts(content: any, kind: 'single' | 'array'): string {
   return `👤 Kontakte: ${content.contactsArrayMessage?.displayName ?? ''} (${n})`.trim()
 }
 
+function viewOnceKind(contentType: string): 'image' | 'video' | 'voice' | null {
+  if (contentType === 'imageMessage') return 'image'
+  if (contentType === 'videoMessage' || contentType === 'ptvMessage') return 'video'
+  if (contentType === 'audioMessage') return 'voice'
+  return null
+}
+
+/** Kurzfassung der zitierten Nachricht (contextInfo.quotedMessage). Steckt in der empfangenen Nachricht, kostet keinen Verkehr. */
+function quotedFrom(ctx: any, env: NormEnv): { text?: string; sender?: string; type?: string } | undefined {
+  const q = ctx?.quotedMessage
+  if (!q || typeof q !== 'object') return undefined
+  const { content } = unwrap(q)
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
+  let text: string | undefined
+  let type: string | undefined
+  if (content?.conversation !== undefined) {
+    type = 'text'
+    text = str(content.conversation)
+  } else if (content?.extendedTextMessage) {
+    type = 'text'
+    text = str(content.extendedTextMessage.text)
+  } else if (content?.imageMessage) {
+    type = 'image'
+    text = str(content.imageMessage.caption)
+  } else if (content?.videoMessage || content?.ptvMessage) {
+    type = 'video'
+    text = str((content.videoMessage ?? content.ptvMessage).caption)
+  } else if (content?.audioMessage) {
+    type = 'voice'
+  } else if (content?.documentMessage) {
+    type = 'document'
+    text = str(content.documentMessage.caption) ?? str(content.documentMessage.fileName)
+  } else if (content?.stickerMessage) {
+    type = 'sticker'
+  } else if (content?.locationMessage || content?.liveLocationMessage) {
+    type = 'text'
+    text = '📍 Standort'
+  } else if (content?.contactMessage || content?.contactsArrayMessage) {
+    type = 'text'
+    text = '👤 Kontakt'
+  } else if (content?.pollCreationMessage || content?.pollCreationMessageV2 || content?.pollCreationMessageV3) {
+    type = 'text'
+    const poll = content.pollCreationMessage ?? content.pollCreationMessageV2 ?? content.pollCreationMessageV3
+    text = `📊 Umfrage: ${str(poll?.name) ?? ''}`.trim()
+  }
+  let sender: string | undefined
+  const participant = str(ctx?.participant)
+  if (participant) {
+    const jid = resolveJid(participant, undefined, env)
+    if (jid) sender = env.nameOf(jid) ?? phoneLabel(jid)
+  }
+  const out: { text?: string; sender?: string; type?: string } = {}
+  if (text) out.text = text
+  if (sender) out.sender = sender
+  if (type) out.type = type
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Neuer Text einer Bearbeitung (editedMessage.message): Text oder Bildunterschrift. */
+export function editedTextOf(message: any): string | undefined {
+  if (!message || typeof message !== 'object') return undefined
+  const { content } = unwrap(message)
+  const pick = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  return (
+    pick(content?.conversation) ??
+    pick(content?.extendedTextMessage?.text) ??
+    pick(content?.imageMessage?.caption) ??
+    pick(content?.videoMessage?.caption) ??
+    pick(content?.documentMessage?.caption)
+  )
+}
+
+/** WhatsApp-Stub-Typ "Nachricht fuer alle geloescht" (proto WebMessageInfo.StubType.REVOKE). */
+const STUB_REVOKE = 1
+
 export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult {
   const key = raw.key
   if (!key?.id) return { kind: 'ignored', reason: 'no_id' }
@@ -275,16 +380,43 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
   }
 
   const body = content[contentType]
-  const replyId: unknown = typeof body === 'object' ? body?.contextInfo?.stanzaId : undefined
+  const ctxInfo = typeof body === 'object' ? body?.contextInfo : undefined
+  const replyId: unknown = ctxInfo?.stanzaId
   const replyTo = typeof replyId === 'string' && replyId ? replyId : undefined
+  const quoted = replyTo ? quotedFrom(ctxInfo, env) : undefined
+
+  // Einmal-Ansehen: Nur Ja/Nein-Angaben zu den Schluesseln ins Protokoll; gespeichert wird nur, wenn store_view_once
+  // eingeschaltet ist und die Schluessel da sind. Sonst bleibt es beim Hinweistext (bisheriges Verhalten).
+  const isViewOnce = wrappedViewOnce || body?.viewOnce === true
+  let probe: ViewOnceProbe | undefined
+  const kind1 = isViewOnce ? viewOnceKind(contentType) : null
+  if (isViewOnce) {
+    probe = {
+      kind: kind1 ?? 'other',
+      hasKey: toBase64(body?.mediaKey) !== null && toBase64(body?.mediaKey) !== '',
+      hasDirectPath: typeof body?.directPath === 'string' && body.directPath !== '',
+      hasUrl: typeof body?.url === 'string' && body.url !== '',
+      hasSha: toBase64(body?.fileSha256) !== null && toBase64(body?.fileSha256) !== '',
+    }
+  }
   const msg = (type: MessageType, text: string | undefined, media?: NormalizedMedia): NormalizeResult => ({
     kind: 'message',
-    message: { ...base, type, ...(text ? { text } : {}), ...(replyTo ? { replyTo } : {}), ...(media ? { media } : {}) },
+    message: {
+      ...base,
+      type,
+      ...(text ? { text } : {}),
+      ...(replyTo ? { replyTo } : {}),
+      ...(quoted?.text ? { replyText: quoted.text } : {}),
+      ...(quoted?.sender ? { replySender: quoted.sender } : {}),
+      ...(quoted?.type ? { replyType: quoted.type } : {}),
+      ...(media ? { media } : {}),
+      ...(isViewOnce ? { viewOnce: true } : {}),
+      ...(probe ? { viewOnceProbe: probe } : {}),
+    },
   })
 
-  // Einmal-Ansehen: nicht speichern (der Absender erwartet "einmal"), nur Hinweis.
-  if (wrappedViewOnce || body?.viewOnce === true) {
-    return msg('system', PLACEHOLDER.viewOnce)
+  if (isViewOnce && !(env.storeViewOnce === true && kind1 !== null && probe?.hasKey === true)) {
+    return msg('system', kind1 ? PLACEHOLDER.viewOnceKind[kind1] : PLACEHOLDER.viewOnce)
   }
 
   switch (contentType) {
@@ -364,7 +496,7 @@ export interface HandlerDeps {
   db: Database
   jobs: JobStore
   media: MediaSink
-  cfg: Pick<IngestConfig, 'retention'>
+  cfg: Pick<IngestConfig, 'retention'> & { media?: Pick<IngestConfig['media'], 'storeViewOnce'> }
   log: Logger
   now?: () => number
   /** Zeitgeber fuer die Wiederholung bei Schreibsperre (Tests ersetzen ihn). */
@@ -409,7 +541,7 @@ export class MessageHandler {
   private readonly db: Database
   private readonly jobs: JobStore
   private readonly media: MediaSink
-  private readonly cfg: Pick<IngestConfig, 'retention'>
+  private readonly cfg: HandlerDeps['cfg']
   private readonly log: Logger
   private readonly now: () => number
   private retentionCache: { at: number; messagesDays: number; mediaDays: number } | null = null
@@ -435,6 +567,7 @@ export class MessageHandler {
     this.env = {
       pnForLid: (lid) => this.jobs.pnForLid(lid),
       nameOf: (jid) => this.jobs.getName(jid) ?? this.nameViaMapping(jid),
+      storeViewOnce: deps.cfg.media?.storeViewOnce === true,
     }
   }
 
@@ -500,6 +633,50 @@ export class MessageHandler {
       this.log.debug('upsert_handled', { ...stats, upsert_type: arg.type ?? null })
     }
     return stats
+  }
+
+  // --- Ereignis: messages.update (fuer alle geloescht, bearbeitet) -------------------------------------
+
+  /**
+   * Die Bibliothek meldet "fuer alle geloescht" und Bearbeitungen als messages.update. Das Ereignis entsteht
+   * lokal aus einer ohnehin empfangenen Nachricht; es braucht keine Anfrage an WhatsApp. Andere Aktualisierungen
+   * (Zustell- und Lesestatus der eigenen Nachrichten) werden ignoriert. Protokoll ohne Inhalte: nur IDs und Zaehler.
+   */
+  handleUpdates(updates: { key?: RawKey | null; update?: any }[] | undefined): void {
+    for (const u of updates ?? []) this.applyUpdate(u, 0)
+  }
+
+  private applyUpdate(u: { key?: RawKey | null; update?: any }, failedRuns: number): void {
+    const id = u?.key?.id
+    if (typeof id !== 'string' || id === '') return
+    const upd = u.update
+    try {
+      if (upd && upd.message === null && upd.messageStubType === STUB_REVOKE) {
+        if (markMessageDeleted(this.db, id, this.now())) {
+          pushEvent(this.db, 'message_updated', { messageId: id })
+          this.log.info('message_marked_deleted', { msg_id: id })
+        }
+        return
+      }
+      const edited = upd?.message?.editedMessage?.message
+      if (edited) {
+        const text = editedTextOf(edited)
+        if (text === undefined) return
+        const at = toSeconds(upd.messageTimestamp) ?? this.now()
+        const res = applyMessageEdit(this.db, id, text, at)
+        if (res.changed) {
+          pushEvent(this.db, 'message_updated', { messageId: id })
+          this.log.info('message_edit_stored', { msg_id: id, version: res.version })
+        }
+      }
+    } catch (err) {
+      if (isBusyError(err) && failedRuns < this.retryDelays.length) {
+        const delay = this.retryDelays[failedRuns] ?? 5_000
+        this.sched.setTimeout(() => this.applyUpdate(u, failedRuns + 1), delay)
+        return
+      }
+      this.log.error('message_update_failed', { msg_id: id, ...errorFields(err) })
+    }
   }
 
   // --- Wiederholung bei Schreibsperre (F02) -------------------------------------------------------
@@ -721,10 +898,22 @@ export class MessageHandler {
       return
     }
     if (m.pushName) this.jobs.upsertName(m.senderJid, m.pushName, NAME_RANK.push)
+    if (m.viewOnceProbe) {
+      // Nur Ja/Nein, kein Inhalt. Zeigt im Journal, ob WhatsApp die Schluessel fuer Einmal-Medien an dieses Geraet liefert.
+      this.log.info('viewonce_probe', {
+        kind: m.viewOnceProbe.kind,
+        has_key: m.viewOnceProbe.hasKey,
+        has_direct_path: m.viewOnceProbe.hasDirectPath,
+        has_url: m.viewOnceProbe.hasUrl,
+        has_sha: m.viewOnceProbe.hasSha,
+        stored: m.media !== undefined,
+      })
+    }
 
     const receivedAt = this.now()
-    const tx = this.db.transaction((): { inserted: boolean; job: NewMediaJob | null } => {
+    const tx = this.db.transaction((): { inserted: boolean; job: NewMediaJob | null; deferred: NewMediaJob | null } => {
       let job: NewMediaJob | null = null
+      let deferred: NewMediaJob | null = null
       upsertChat(this.db, {
         id: m.chatId,
         name: m.chatName,
@@ -741,41 +930,57 @@ export class MessageHandler {
         type: m.type,
         text: m.text,
         replyTo: m.replyTo,
+        ...(m.viewOnce ? { viewOnce: true } : {}),
+        ...(m.replyText ? { replyText: m.replyText } : {}),
+        ...(m.replySender ? { replySender: m.replySender } : {}),
+        ...(m.replyType ? { replyType: m.replyType } : {}),
       })
-      if (!inserted) return { inserted: false, job: null }
+      if (!inserted) return { inserted: false, job: null, deferred: null }
 
       if (m.media) {
         ensureMediaRow(this.db, m.id)
-        const skipDownload = origin === 'history' || this.isExpired(m.waTimestamp, 'media')
+        // Verlaufsmedien werden nicht geladen, bleiben aber auf Wunsch ladbar (Schluessel im privaten Speicher),
+        // solange die Medien-Aufbewahrung nicht abgelaufen ist. Abgelaufene sind endgueltig weg.
+        const mediaExpired = this.isExpired(m.waTimestamp, 'media')
+        const skip: SkipReason | null = mediaExpired ? 'retention' : origin === 'history' ? 'history' : null
         setMediaStatus(this.db, m.id, {
-          status: skipDownload ? 'expired' : 'pending',
+          status: skip ? 'expired' : 'pending',
+          ...(skip ? { skipReason: skip, loadable: skip === 'history' } : {}),
           ...(m.media.mimeType ? { mimeType: m.media.mimeType } : {}),
           ...(m.media.declaredBytes !== null ? { sizeBytes: m.media.declaredBytes } : {}),
           ...(m.media.durationSeconds !== null ? { durationSeconds: m.media.durationSeconds } : {}),
         })
-        if (!skipDownload) {
-          job = {
-            messageId: m.id,
-            chatId: m.chatId,
-            kind: m.media.kind,
-            descriptor: m.media.descriptor,
-            waTimestamp: m.waTimestamp,
-          }
+        const newJob: NewMediaJob = {
+          messageId: m.id,
+          chatId: m.chatId,
+          kind: m.media.kind,
+          descriptor: m.media.descriptor,
+          waTimestamp: m.waTimestamp,
         }
+        if (skip === null) job = newJob
+        else if (skip === 'history') deferred = newJob
       }
       if (origin === 'live') {
         pushEvent(this.db, 'new_message', { chatId: m.chatId, messageId: m.id, type: m.type })
       }
-      return { inserted: true, job }
+      return { inserted: true, job, deferred }
     })
 
-    const { inserted, job: mediaJob } = tx()
+    const { inserted, job: mediaJob, deferred } = tx()
     if (!inserted) {
       stats.duplicates++
       return
     }
     stats.stored++
 
+    if (deferred) {
+      try {
+        this.jobs.upsertDeferred(deferred)
+      } catch (err) {
+        // Ohne Schluessel gibt es kein "jetzt laden"; die Nachricht selbst ist gespeichert.
+        this.log.warn('deferred_store_failed', { msg_id: m.id, ...errorFields(err) })
+      }
+    }
     if (mediaJob) {
       const result = this.media.enqueue(mediaJob)
       if (result !== 'queued' && result !== 'duplicate') {

@@ -14,8 +14,12 @@
 import type { Database, MediaStatus } from '@waread/db'
 
 export {
+  applyMessageEdit,
+  deleteCommand,
   getSetting,
   insertMessageIfNotExists,
+  listCommands,
+  markMessageDeleted,
   openDb,
   pushEvent,
   runMigrations,
@@ -25,6 +29,7 @@ export {
   type Database,
   type MediaStatus,
   type MessageType,
+  type SkipReason,
 } from '@waread/db'
 
 // ---------------------------------------------------------------------------------------------
@@ -48,4 +53,18 @@ export function listMediaIdsByStatus(db: Database, statuses: MediaStatus[]): str
 /** Existiert die Nachricht noch? (Der Cleanup-Dienst kann sie waehrend eines Downloads geloescht haben.) */
 export function messageExists(db: Database, messageId: string): boolean {
   return db.prepare('SELECT 1 AS x FROM messages WHERE id = ?').get(messageId) !== undefined
+}
+
+/** Ist die Nachricht mit dem Schild geschuetzt? false auch, wenn sie nicht (mehr) existiert. */
+export function isMessageProtected(db: Database, messageId: string): boolean {
+  const r = db.prepare('SELECT protected_at AS p FROM messages WHERE id = ?').get(messageId) as
+    | { p: number | null }
+    | undefined
+  return r?.p !== null && r?.p !== undefined
+}
+
+/** Medien-Zeilen, die "Medium jetzt laden" anbieten (loadable=1): Nachrichten-IDs. */
+export function listLoadableMediaIds(db: Database): string[] {
+  const rows = db.prepare('SELECT message_id FROM media WHERE loadable = 1').all() as { message_id: string }[]
+  return rows.map((r) => r.message_id)
 }

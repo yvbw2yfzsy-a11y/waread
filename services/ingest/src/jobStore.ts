@@ -41,6 +41,11 @@ export interface MediaJob {
   attempts: number
   nextAttemptAt: number
   createdAt: number
+  /**
+   * true = ausdruecklich angefordert ("Medium jetzt laden"): die Groessen-Regeln der Download-Regel gelten nicht,
+   * es gilt nur das feste Hoechstmass (media.forceMaxBytes).
+   */
+  forced?: boolean
 }
 
 export type NewMediaJob = Omit<MediaJob, 'attempts' | 'nextAttemptAt' | 'createdAt'>
@@ -57,6 +62,17 @@ interface JobRow {
   attempts: number
   next_attempt_at: number
   created_at: number
+  forced?: number
+}
+
+/** Schluessel eines Mediums, das nicht (oder nicht fertig) geladen wurde und auf Wunsch noch geladen werden kann. */
+export interface DeferredMedia {
+  messageId: string
+  chatId: string
+  kind: MediaKind
+  descriptor: MediaDescriptor
+  waTimestamp: number
+  createdAt: number
 }
 
 export class JobStore {
@@ -74,6 +90,14 @@ export class JobStore {
         next_attempt_at INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS deferred_media (
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        descriptor_json TEXT NOT NULL,
+        wa_timestamp INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS names (
         jid TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -85,6 +109,11 @@ export class JobStore {
         pn TEXT NOT NULL
       );
     `)
+    // Spalte "forced" kam spaeter dazu: bei bestehenden Dateien nachziehen.
+    const cols = db.prepare('PRAGMA table_info(media_jobs)').all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'forced')) {
+      db.exec('ALTER TABLE media_jobs ADD COLUMN forced INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   static open(file: string): JobStore {
@@ -107,11 +136,57 @@ export class JobStore {
     this.db
       .prepare(
         `INSERT INTO media_jobs
-           (message_id, chat_id, kind, descriptor_json, wa_timestamp, attempts, next_attempt_at, created_at)
-         VALUES (?, ?, ?, ?, ?, 0, 0, ?)
+           (message_id, chat_id, kind, descriptor_json, wa_timestamp, attempts, next_attempt_at, created_at, forced)
+         VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+         ON CONFLICT(message_id) DO NOTHING`,
+      )
+      .run(job.messageId, job.chatId, job.kind, JSON.stringify(job.descriptor), job.waTimestamp, now, job.forced ? 1 : 0)
+  }
+
+  // --- Zurueckgestellte Medien ("Medium jetzt laden") -----------------------------------------------
+
+  /** Merkt sich die Schluessel eines nicht geladenen Mediums. Ein vorhandener Eintrag bleibt unveraendert. */
+  upsertDeferred(job: NewMediaJob, now = nowSec()): void {
+    this.db
+      .prepare(
+        `INSERT INTO deferred_media (message_id, chat_id, kind, descriptor_json, wa_timestamp, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(message_id) DO NOTHING`,
       )
       .run(job.messageId, job.chatId, job.kind, JSON.stringify(job.descriptor), job.waTimestamp, now)
+  }
+
+  getDeferred(messageId: string): DeferredMedia | undefined {
+    const r = this.db.prepare('SELECT * FROM deferred_media WHERE message_id = ?').get(messageId) as
+      | { message_id: string; chat_id: string; kind: string; descriptor_json: string; wa_timestamp: number; created_at: number }
+      | undefined
+    return r
+      ? {
+          messageId: r.message_id,
+          chatId: r.chat_id,
+          kind: r.kind as MediaKind,
+          descriptor: JSON.parse(r.descriptor_json) as MediaDescriptor,
+          waTimestamp: r.wa_timestamp,
+          createdAt: r.created_at,
+        }
+      : undefined
+  }
+
+  deleteDeferred(messageId: string): void {
+    this.db.prepare('DELETE FROM deferred_media WHERE message_id = ?').run(messageId)
+  }
+
+  /** Nachrichten-ID und Zeitstempel aller zurueckgestellten Medien (fuer das Aufraeumen, ohne Schluessel zu laden). */
+  listDeferredIds(): { messageId: string; waTimestamp: number }[] {
+    const rows = this.db.prepare('SELECT message_id, wa_timestamp FROM deferred_media').all() as {
+      message_id: string
+      wa_timestamp: number
+    }[]
+    return rows.map((r) => ({ messageId: r.message_id, waTimestamp: r.wa_timestamp }))
+  }
+
+  countDeferred(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM deferred_media').get() as { n: number }).n
   }
 
   getJob(messageId: string): MediaJob | undefined {
@@ -192,5 +267,6 @@ function toJob(row: JobRow): MediaJob {
     attempts: row.attempts,
     nextAttemptAt: row.next_attempt_at,
     createdAt: row.created_at,
+    forced: row.forced === 1,
   }
 }
