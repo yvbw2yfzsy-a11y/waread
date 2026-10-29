@@ -768,3 +768,92 @@ test(
     assertNoLeak(env, cap.all(), ['GEHEIMTEXT', 'Alice', 'bob']);
   }),
 );
+
+// ---------------------------------------------------------------------------
+// Schild (Version 2): geschützte Nachrichten löscht kein Lauf
+// ---------------------------------------------------------------------------
+const protect = (env: Env, id: string): void => {
+  env.db.prepare('UPDATE messages SET protected_at = ? WHERE id = ?').run(NOW, id);
+};
+
+test(
+  'Schild: geschützte alte Nachricht bleibt samt Medien, Dateien, Suchindex und Versionen; die ungeschützte daneben verschwindet',
+  withEnv((env) => {
+    addMsg(env, 'keep', NOW - 10 * D, { text: 'wichtigtext', file: 'c1/keep.jpg', thumb: 'c1/keep.thumb.jpg' });
+    addMsg(env, 'gone', NOW - 10 * D, { text: 'wegtext', file: 'c1/gone.jpg' });
+    env.db.prepare("INSERT INTO message_versions (message_id, version, text, replaced_at) VALUES ('keep', 1, 'frueher', ?)").run(NOW - 9 * D);
+    env.db.prepare("INSERT INTO message_versions (message_id, version, text, replaced_at) VALUES ('gone', 1, 'frueher2', ?)").run(NOW - 9 * D);
+    protect(env, 'keep');
+
+    const res = run(env);
+    assert.equal(res.deletedMessages, 1);
+    assert.equal(num(env, "SELECT count(*) AS c FROM messages WHERE id = 'keep'"), 1);
+    assert.equal(num(env, "SELECT count(*) AS c FROM media WHERE message_id = 'keep' AND status = 'ready'"), 1);
+    assert.equal(exists(env, 'c1/keep.jpg'), true);
+    assert.equal(exists(env, 'c1/keep.thumb.jpg'), true);
+    assert.equal(exists(env, 'c1/gone.jpg'), false);
+    assert.equal(num(env, "SELECT count(*) AS c FROM messages_fts WHERE messages_fts MATCH 'wichtigtext'"), 1);
+    assert.equal(num(env, "SELECT count(*) AS c FROM message_versions WHERE message_id = 'keep'"), 1);
+    assert.equal(num(env, "SELECT count(*) AS c FROM message_versions WHERE message_id = 'gone'"), 0, 'Versionen gehen mit der Nachricht');
+
+    // Auch der Waisen-Sweep darf geschützte Dateien nicht anfassen (sie sind in der DB verzeichnet)
+    age(abs(env, 'c1/keep.jpg'), 5 * D);
+    age(abs(env, 'c1'), 5 * D);
+    run(env);
+    assert.equal(exists(env, 'c1/keep.jpg'), true);
+
+    // Schild weg -> der nächste Lauf räumt auf
+    env.db.prepare("UPDATE messages SET protected_at = NULL WHERE id = 'keep'").run();
+    run(env);
+    assert.equal(num(env, 'SELECT count(*) AS c FROM messages'), 0);
+    assert.equal(exists(env, 'c1/keep.jpg'), false);
+  }),
+);
+
+test(
+  'Schild: Medien-Ablauf (retentionMediaDays) trifft geschützte Nachrichten nicht; ungeschützte werden nicht mehr ladbar',
+  withEnv((env) => {
+    setSetting(env, 'retentionDays', '7');
+    setSetting(env, 'retentionMediaDays', '1');
+    addMsg(env, 'p', NOW - 2 * D, { file: 'c1/p.jpg' });
+    addMsg(env, 'q', NOW - 2 * D, { file: 'c1/q.jpg' });
+    env.db.prepare("UPDATE media SET loadable = 1, skip_reason = 'rule_off' WHERE message_id = 'q'").run();
+    protect(env, 'p');
+
+    run(env);
+    assert.equal(exists(env, 'c1/p.jpg'), true);
+    assert.equal(exists(env, 'c1/q.jpg'), false);
+    assert.deepEqual(env.db.prepare("SELECT status, loadable, skip_reason FROM media WHERE message_id = 'p'").get(), { status: 'ready', loadable: 0, skip_reason: null });
+    assert.deepEqual(env.db.prepare("SELECT status, loadable, skip_reason FROM media WHERE message_id = 'q'").get(), { status: 'expired', loadable: 0, skip_reason: 'rule_off' });
+  }),
+);
+
+test(
+  'Schild: der Probelauf (--dry-run) zählt geschützte Nachrichten nicht als Kandidaten',
+  withEnv((env) => {
+    addMsg(env, 'p', NOW - 10 * D, { file: 'c1/p.jpg' });
+    addMsg(env, 'q', NOW - 10 * D, { file: 'c1/q.jpg' });
+    protect(env, 'p');
+    const res = run(env, { dryRun: true });
+    assert.equal(res.deletedMessages, 1);
+    assert.equal(res.deletedMedia, 1);
+    assert.equal(num(env, 'SELECT count(*) AS c FROM messages'), 2, 'Probelauf ändert nichts');
+  }),
+);
+
+test(
+  'Datenbank noch auf Version 1 (Ingest/Web noch nicht migriert): der Cleanup läuft weiter, ohne die neuen Spalten anzufassen',
+  withEnv((env) => {
+    // Version-1-Datei von Hand: Schema ohne Migration 2
+    const v1 = path.join(env.dir, 'v1.db');
+    const db1 = openDb(v1);
+    db1.exec(fs.readFileSync(fileURLToPath(new URL('../db/schema.sql', import.meta.url)), 'utf8'));
+    db1.pragma('user_version = 1');
+    db1.prepare("INSERT INTO chats (id, name, is_group, last_activity_at) VALUES ('c1', 'A', 0, ?)").run(NOW);
+    db1.prepare("INSERT INTO messages (id, chat_id, sender, wa_timestamp, received_at, direction, type, text) VALUES ('old', 'c1', 's', ?, ?, 'in', 'text', 'x')").run(NOW - 10 * D, NOW);
+    db1.close();
+    const res = runCleanup({ dbPath: v1, mediaRoot: env.root, now: NOW, log: silent });
+    assert.deepEqual(res.errors, []);
+    assert.equal(res.deletedMessages, 1);
+  }),
+);

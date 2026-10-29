@@ -98,6 +98,16 @@ export interface CleanupResult {
 }
 
 interface Ctx {
+  /**
+   * Geschuetzte Nachrichten (Schild, messages.protected_at) loescht dieser Lauf nie. Die Spalte gibt es erst nach der
+   * Migration auf Version 2 (Ingest und Web fuehren sie beim Start aus, der Cleanup migriert nie): vorher ist die
+   * Bedingung leer, weil noch nichts geschuetzt sein kann. Feste Textbausteine, nie Eingaben.
+   */
+  protectedAnd: string;
+  /** Wie protectedAnd, fuer Abfragen, in denen messages den Alias s traegt. */
+  protectedAndS: string;
+  /** Spalten media.loadable / media.skip_reason vorhanden (Version 2). */
+  v2: boolean;
   db: Db;
   log: Logger;
   res: CleanupResult;
@@ -121,6 +131,10 @@ interface MediaRow { rid: number; id: string; f: string | null; t: string | null
 // Sperren länger als der Standard (Ingest und Web schreiben parallel; VACUUM braucht Geduld).
 // ---------------------------------------------------------------------------
 const BUSY_TIMEOUT_MS = 15_000;
+
+function hasColumn(db: Db, table: string, column: string): boolean {
+  return (db.pragma(`table_info(${table})`) as { name: string }[]).some((c) => c.name === column);
+}
 
 export function openExistingDb(dbPath: string): Db {
   if (!fs.existsSync(dbPath)) throw new Error(`Datenbank nicht vorhanden: ${dbPath} (der Cleanup-Dienst legt keine an)`);
@@ -256,7 +270,7 @@ function removeFiles(ctx: Ctx, paths: (string | null)[]): { ok: boolean; hadPath
 // ---------------------------------------------------------------------------
 function purgeExpiredMessages(ctx: Ctx, before: number): void {
   const { db } = ctx;
-  const selMsgs = db.prepare('SELECT rowid AS rid, id FROM messages WHERE wa_timestamp < ? ORDER BY rowid LIMIT ?');
+  const selMsgs = db.prepare(`SELECT rowid AS rid, id FROM messages WHERE wa_timestamp < ?${ctx.protectedAnd} ORDER BY rowid LIMIT ?`);
   const selMedia = db.prepare('SELECT file_path AS f, thumbnail_path AS t FROM media WHERE message_id = ?');
   const delMedia = db.prepare('DELETE FROM media WHERE message_id = ?');
   const delMsg = db.prepare('DELETE FROM messages WHERE id = ?');
@@ -295,12 +309,17 @@ function expireMediaOnly(ctx: Ctx, from: number, to: number): void {
   const sel = db.prepare(
     `SELECT m.rowid AS rid, m.message_id AS id, m.file_path AS f, m.thumbnail_path AS t
        FROM media m JOIN messages s ON s.id = m.message_id
-      WHERE s.wa_timestamp >= ? AND s.wa_timestamp < ?
+      WHERE s.wa_timestamp >= ? AND s.wa_timestamp < ?${ctx.protectedAndS}
         AND (m.status IN ('pending','downloading','ready') OR m.file_path IS NOT NULL OR m.thumbnail_path IS NOT NULL)
         AND m.rowid > ?
       ORDER BY m.rowid LIMIT ?`,
   );
-  const upd = db.prepare("UPDATE media SET status = 'expired', file_path = NULL, thumbnail_path = NULL WHERE message_id = ?");
+  // loadable=0: nach Ablauf der Medien-Aufbewahrung gibt es nichts mehr zu laden (der Ingest gibt die Schluessel frei).
+  const upd = db.prepare(
+    ctx.v2
+      ? "UPDATE media SET status = 'expired', file_path = NULL, thumbnail_path = NULL, loadable = 0, skip_reason = COALESCE(skip_reason, 'retention') WHERE message_id = ?"
+      : "UPDATE media SET status = 'expired', file_path = NULL, thumbnail_path = NULL WHERE message_id = ?",
+  );
   const apply = db.transaction((ids: string[]) => {
     for (const id of ids) upd.run(id);
   });
@@ -328,15 +347,15 @@ function expireMediaOnly(ctx: Ctx, from: number, to: number): void {
 function countCandidates(ctx: Ctx, messagesBefore: number, mediaBefore: number): void {
   const count = (sql: string, ...p: number[]): number => (ctx.db.prepare(sql).get(...p) as { c: number }).c;
   const withPaths = '(m.file_path IS NOT NULL OR m.thumbnail_path IS NOT NULL)';
-  ctx.res.deletedMessages = count('SELECT count(*) AS c FROM messages WHERE wa_timestamp < ?', messagesBefore);
+  ctx.res.deletedMessages = count(`SELECT count(*) AS c FROM messages WHERE wa_timestamp < ?${ctx.protectedAnd}`, messagesBefore);
   ctx.res.deletedMedia = count(
-    `SELECT count(*) AS c FROM media m JOIN messages s ON s.id = m.message_id WHERE s.wa_timestamp < ? AND ${withPaths}`,
+    `SELECT count(*) AS c FROM media m JOIN messages s ON s.id = m.message_id WHERE s.wa_timestamp < ?${ctx.protectedAndS} AND ${withPaths}`,
     messagesBefore,
   );
   if (mediaBefore > messagesBefore) {
     ctx.res.deletedMedia += count(
       `SELECT count(*) AS c FROM media m JOIN messages s ON s.id = m.message_id
-        WHERE s.wa_timestamp >= ? AND s.wa_timestamp < ? AND ${withPaths}`,
+        WHERE s.wa_timestamp >= ? AND s.wa_timestamp < ?${ctx.protectedAndS} AND ${withPaths}`,
       messagesBefore,
       mediaBefore,
     );
@@ -530,7 +549,11 @@ export function runCleanup(opts: CleanupOptions): CleanupResult {
       vacuumed: false,
       errors: [],
     };
+    const v2 = hasColumn(db, 'messages', 'protected_at') && hasColumn(db, 'media', 'loadable');
     const ctx: Ctx = {
+      protectedAnd: v2 ? ' AND protected_at IS NULL' : '',
+      protectedAndS: v2 ? ' AND s.protected_at IS NULL' : '',
+      v2,
       db,
       log,
       res,
