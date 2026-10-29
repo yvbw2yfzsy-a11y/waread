@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,13 @@ import {
   insertMessageIfNotExists,
   updateMessageText,
   markMessageDeleted,
+  applyMessageEdit,
+  listMessageVersions,
+  setMessageProtected,
+  countProtected,
+  enqueueCommand,
+  listCommands,
+  deleteCommand,
   setMediaStatus,
   markSeen,
   markPlayed,
@@ -78,7 +85,7 @@ describe('Migrationen und Verbindung', () => {
     const names = (
       db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table')").pluck().all() as string[]
     ).sort();
-    for (const t of ['chats', 'messages', 'media', 'messages_fts', 'settings', 'events_outbox']) {
+    for (const t of ['chats', 'messages', 'media', 'messages_fts', 'settings', 'events_outbox', 'message_versions', 'ingest_commands']) {
       assert.ok(names.includes(t), `Tabelle ${t} fehlt`);
     }
     assert.equal(db.pragma('foreign_keys', { simple: true }), 1);
@@ -475,5 +482,159 @@ describe('Einstellungen und Events', () => {
     const db = freshDb();
     db.prepare("INSERT INTO events_outbox (type, payload_json, created_at) VALUES ('x', '{kaputt', 1)").run();
     assert.deepEqual(pullEventsSince(db, 0).map((e) => e.payload), [null]);
+  });
+});
+
+describe('Version 2: Versionen, Loeschmarke, Schild, Befehle, Zitat-Kurztext', () => {
+  it('Migration von Version 1 auf 2 behaelt bestehende Zeilen und setzt Standardwerte', () => {
+    const db = openDb(':memory:');
+    // Version 1 von Hand aufbauen: schema.sql ausfuehren und user_version setzen
+    const here = new URL('./schema.sql', import.meta.url);
+    db.exec(readFileSync(here, 'utf8'));
+    db.pragma('user_version = 1');
+    db.prepare("INSERT INTO chats (id, name, is_group, last_activity_at) VALUES ('c1', 'A', 0, 1)").run();
+    db.prepare(
+      "INSERT INTO messages (id, chat_id, sender, wa_timestamp, received_at, direction, type, text) VALUES ('old', 'c1', 's', 5, 5, 'in', 'image', 'hallo')",
+    ).run();
+    db.prepare("INSERT INTO media (message_id, status) VALUES ('old', 'ready')").run();
+    runMigrations(db);
+    assert.equal(db.pragma('user_version', { simple: true }), LATEST_VERSION);
+    const row = db.prepare("SELECT protected_at AS p, view_once AS v, edited_at AS e, reply_text AS r FROM messages WHERE id = 'old'").get() as Record<string, unknown>;
+    assert.deepEqual(row, { p: null, v: 0, e: null, r: null });
+    const md = db.prepare("SELECT status, skip_reason AS s, loadable AS l FROM media WHERE message_id = 'old'").get() as Record<string, unknown>;
+    assert.deepEqual(md, { status: 'ready', s: null, l: 0 });
+    assert.equal(searchMessages(db, 'hallo').length, 1);
+    assertFtsConsistent(db);
+  });
+
+  it('Bearbeiten legt die alte Fassung als Version ab; gleicher Text erzeugt keine Version', () => {
+    const db = freshDb();
+    const m = msg({ text: 'erste Fassung' });
+    insertMessageIfNotExists(db, m);
+    assert.deepEqual(applyMessageEdit(db, m.id, 'zweite Fassung', 2_000_000), { changed: true, version: 1 });
+    assert.deepEqual(applyMessageEdit(db, m.id, 'zweite Fassung', 2_000_001), { changed: false, version: 0 });
+    assert.deepEqual(applyMessageEdit(db, m.id, 'dritte Fassung', 2_000_100), { changed: true, version: 2 });
+    assert.deepEqual(applyMessageEdit(db, 'unbekannt', 'x'), { changed: false, version: 0 });
+    assert.deepEqual(listMessageVersions(db, m.id), [
+      { version: 1, text: 'erste Fassung', replacedAt: 2_000_000 },
+      { version: 2, text: 'zweite Fassung', replacedAt: 2_000_100 },
+    ]);
+    const row = db.prepare('SELECT text, edited, edited_at AS at FROM messages WHERE id = ?').get(m.id) as Record<string, unknown>;
+    assert.deepEqual(row, { text: 'dritte Fassung', edited: 1, at: 2_000_100 });
+    // Der Suchindex kennt nur den aktuellen Text
+    assert.equal(searchMessages(db, 'dritte').length, 1);
+    assert.equal(searchMessages(db, 'erste').length, 0);
+    assertFtsConsistent(db);
+  });
+
+  it('Loeschmarke: deleted_at bleibt beim ersten Zeitpunkt', () => {
+    const db = freshDb();
+    const m = msg();
+    insertMessageIfNotExists(db, m);
+    assert.equal(markMessageDeleted(db, m.id, 3_000_000), true);
+    assert.equal(markMessageDeleted(db, m.id, 3_000_500), true);
+    const row = db.prepare('SELECT deleted, deleted_at AS at FROM messages WHERE id = ?').get(m.id) as Record<string, unknown>;
+    assert.deepEqual(row, { deleted: 1, at: 3_000_000 });
+  });
+
+  it('Zitat-Kurztext und Einmal-Kennzeichnung werden gespeichert und gekuerzt', () => {
+    const db = freshDb();
+    const long = 'x'.repeat(300);
+    const m = msg({ replyTo: 'orig', replyText: `  ${long}  `, replySender: 'Anna', replyType: 'image', viewOnce: true });
+    insertMessageIfNotExists(db, m);
+    const row = db.prepare('SELECT reply_text AS t, reply_sender AS s, reply_type AS ty, view_once AS v FROM messages WHERE id = ?').get(m.id) as { t: string; s: string; ty: string; v: number };
+    assert.equal([...row.t].length, 140);
+    assert.ok(row.t.endsWith('…'));
+    assert.deepEqual({ s: row.s, ty: row.ty, v: row.v }, { s: 'Anna', ty: 'image', v: 1 });
+    const plain = msg();
+    insertMessageIfNotExists(db, plain);
+    const p = db.prepare('SELECT reply_text AS t, view_once AS v FROM messages WHERE id = ?').get(plain.id) as { t: unknown; v: number };
+    assert.deepEqual(p, { t: null, v: 0 });
+  });
+
+  it('setMediaStatus kennt skipReason und loadable; null loescht den Grund', () => {
+    const db = freshDb();
+    const m = msg({ type: 'video', text: undefined });
+    insertMessageIfNotExists(db, m);
+    setMediaStatus(db, m.id, { status: 'expired', skipReason: 'rule_off', loadable: true });
+    const a = db.prepare('SELECT status, skip_reason AS s, loadable AS l FROM media WHERE message_id = ?').get(m.id);
+    assert.deepEqual(a, { status: 'expired', s: 'rule_off', l: 1 });
+    setMediaStatus(db, m.id, { status: 'ready', skipReason: null, loadable: false });
+    const b = db.prepare('SELECT status, skip_reason AS s, loadable AS l FROM media WHERE message_id = ?').get(m.id);
+    assert.deepEqual(b, { status: 'ready', s: null, l: 0 });
+    assert.throws(() => db.prepare("UPDATE media SET skip_reason = 'erfunden' WHERE message_id = ?").run(m.id), /CHECK/);
+  });
+
+  it('Schild: deleteExpired laesst geschuetzte Nachrichten samt Medien und Version stehen', () => {
+    const db = freshDb();
+    const keep = msg({ type: 'image', text: 'Wichtig', waTimestamp: 100 });
+    const gone = msg({ type: 'image', text: 'Weg', waTimestamp: 110 });
+    for (const m of [keep, gone]) insertMessageIfNotExists(db, m);
+    setMediaStatus(db, keep.id, { status: 'ready', filePath: '/m/keep.jpg', thumbnailPath: '/m/keep_t.jpg' });
+    setMediaStatus(db, gone.id, { status: 'ready', filePath: '/m/gone.jpg' });
+    applyMessageEdit(db, keep.id, 'Wichtig (neu)', 150);
+    assert.equal(setMessageProtected(db, keep.id, true, 500), true);
+    assert.equal(setMessageProtected(db, keep.id, true, 900), true);
+    assert.equal(scalar(db, 'SELECT protected_at FROM messages WHERE id = ?', keep.id), 500, 'Zeitpunkt bleibt');
+    assert.deepEqual(countProtected(db), { messages: 1, mediaBytes: 0 });
+
+    const res = deleteExpired(db, { messagesBefore: 10_000, mediaBefore: 10_000 });
+    assert.deepEqual(res.deletedMessageIds, [gone.id]);
+    assert.deepEqual(res.mediaPathsToDelete, ['/m/gone.jpg']);
+    assert.equal(scalar(db, 'SELECT count(*) FROM messages WHERE id = ?', keep.id), 1);
+    assert.equal(scalar(db, "SELECT status FROM media WHERE message_id = ?", keep.id), 'ready', 'Medium geschuetzt');
+    assert.equal(listMessageVersions(db, keep.id).length, 1);
+    assertFtsConsistent(db);
+
+    // Schild entfernen: beim naechsten Lauf verschwindet sie
+    assert.equal(setMessageProtected(db, keep.id, false), true);
+    const res2 = deleteExpired(db, { messagesBefore: 10_000, mediaBefore: 10_000 });
+    assert.deepEqual(res2.deletedMessageIds, [keep.id]);
+    assert.equal(scalar(db, 'SELECT count(*) FROM message_versions'), 0, 'Versionen gehen mit der Nachricht');
+    assertFtsConsistent(db);
+  });
+
+  it('Schild: nur includeProtected === true loescht auch geschuetzte (nicht "true", nicht 1)', () => {
+    const db = freshDb();
+    const m = msg({ text: 'geschuetzt', waTimestamp: 100 });
+    insertMessageIfNotExists(db, m);
+    setMessageProtected(db, m.id, true);
+    for (const bad of [undefined, false, 1, 'true'] as unknown[]) {
+      const r = deleteExpired(db, { messagesBefore: 10_000, mediaBefore: 10_000, includeProtected: bad as boolean });
+      assert.deepEqual(r.deletedMessageIds, [], `includeProtected=${String(bad)} darf nichts loeschen`);
+    }
+    const r = deleteExpired(db, { messagesBefore: 10_000, mediaBefore: 10_000, includeProtected: true });
+    assert.deepEqual(r.deletedMessageIds, [m.id]);
+  });
+
+  it('Schild: Medien-Ablauf (mediaBefore) trifft geschuetzte Nachrichten nicht; ungeschuetzte werden nicht mehr ladbar', () => {
+    const db = freshDb();
+    const prot = msg({ type: 'voice', text: undefined, waTimestamp: 100 });
+    const plain = msg({ type: 'voice', text: undefined, waTimestamp: 110 });
+    for (const m of [prot, plain]) insertMessageIfNotExists(db, m);
+    setMediaStatus(db, prot.id, { status: 'ready', filePath: '/m/p.ogg' });
+    setMediaStatus(db, plain.id, { status: 'failed', loadable: true });
+    setMediaStatus(db, plain.id, { filePath: '/m/q.ogg' });
+    setMessageProtected(db, prot.id, true);
+    const res = deleteExpired(db, { messagesBefore: 0, mediaBefore: 10_000 });
+    assert.deepEqual(res.mediaPathsToDelete, ['/m/q.ogg']);
+    assert.equal(scalar(db, 'SELECT status FROM media WHERE message_id = ?', prot.id), 'ready');
+    const row = db.prepare('SELECT status, loadable AS l, skip_reason AS s FROM media WHERE message_id = ?').get(plain.id);
+    assert.deepEqual(row, { status: 'expired', l: 0, s: 'retention' });
+  });
+
+  it('Befehle: Reihenfolge, Payload-Roundtrip, kaputtes JSON blockiert nichts', () => {
+    const db = freshDb();
+    const a = enqueueCommand(db, 'load_media', { messageId: 'm1' });
+    const b = enqueueCommand(db, 'load_media', { messageId: 'm2' });
+    assert.ok(b > a);
+    db.prepare("UPDATE ingest_commands SET payload_json = '{kaputt' WHERE id = ?").run(b);
+    const cmds = listCommands(db);
+    assert.deepEqual(cmds.map((c) => [c.id, c.type, c.payload]), [
+      [a, 'load_media', { messageId: 'm1' }],
+      [b, 'load_media', null],
+    ]);
+    deleteCommand(db, a);
+    assert.deepEqual(listCommands(db).map((c) => c.id), [b]);
   });
 });

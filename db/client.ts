@@ -103,6 +103,23 @@ export interface NewMessage {
   type: MessageType;
   text?: string;
   replyTo?: string;
+  /** Einmal-Ansehen-Nachricht (nur zur Kennzeichnung). */
+  viewOnce?: boolean;
+  /** Kurzzitat der Nachricht, auf die geantwortet wurde (wird auf 140 Zeichen gekuerzt). */
+  replyText?: string;
+  replySender?: string;
+  /** Typ der zitierten Nachricht (text, image, voice, video, document ...), nur zur Anzeige. */
+  replyType?: string;
+}
+
+/** Laenge des gespeicherten Kurzzitats in Zeichen (nicht Bytes). */
+export const REPLY_TEXT_MAX = 140;
+
+function clip(value: string | undefined, max: number): string | null {
+  if (value === undefined || value === '') return null;
+  const chars = [...value.replace(/\s+/g, ' ').trim()];
+  if (chars.length === 0) return null;
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : chars.join('');
 }
 
 /**
@@ -124,9 +141,11 @@ export function insertMessageIfNotExists(db: Database, msg: NewMessage): boolean
     const info = db
       .prepare(
         `INSERT INTO messages
-           (id, chat_id, sender, wa_timestamp, received_at, direction, type, text, reply_to)
+           (id, chat_id, sender, wa_timestamp, received_at, direction, type, text, reply_to,
+            view_once, reply_text, reply_sender, reply_type)
          VALUES
-           (@id, @chatId, @sender, @waTimestamp, @receivedAt, @direction, @type, @text, @replyTo)
+           (@id, @chatId, @sender, @waTimestamp, @receivedAt, @direction, @type, @text, @replyTo,
+            @viewOnce, @replyText, @replySender, @replyType)
          ON CONFLICT(id) DO NOTHING`,
       )
       .run({
@@ -139,6 +158,10 @@ export function insertMessageIfNotExists(db: Database, msg: NewMessage): boolean
         type: m.type,
         text: m.text ?? null,
         replyTo: m.replyTo ?? null,
+        viewOnce: m.viewOnce ? 1 : 0,
+        replyText: clip(m.replyText, REPLY_TEXT_MAX),
+        replySender: clip(m.replySender, 100),
+        replyType: clip(m.replyType, 20),
       });
     if (info.changes === 0) return false;
     if (MEDIA_TYPES.has(m.type)) {
@@ -150,24 +173,144 @@ export function insertMessageIfNotExists(db: Database, msg: NewMessage): boolean
 }
 
 /**
- * ERWEITERUNG ueber den Vertrag hinaus: Bearbeitung einer Nachricht (setzt edited=1).
- * Der Suchindex folgt per Trigger. Gibt false zurueck, wenn die Nachricht unbekannt ist.
+ * Bearbeitung einer Nachricht: legt die bisherige Fassung als Version ab (1 = Original), setzt den neuen
+ * Text, edited=1 und edited_at. Der Suchindex folgt per Trigger (er enthaelt nur den aktuellen Text).
+ * changed=false, wenn die Nachricht unbekannt ist oder der Text schon so lautet (keine doppelte Version).
+ * version = laufende Nummer der abgelegten Fassung (0, wenn nichts abgelegt wurde).
  */
+export function applyMessageEdit(
+  db: Database,
+  messageId: string,
+  newText: string,
+  editedAt: number = nowSec(),
+): { changed: boolean; version: number } {
+  assertInt('editedAt', editedAt);
+  return db
+    .transaction((): { changed: boolean; version: number } => {
+      const row = db.prepare('SELECT text FROM messages WHERE id = ?').get(messageId) as
+        | { text: string | null }
+        | undefined;
+      if (!row) return { changed: false, version: 0 };
+      if ((row.text ?? '') === newText) return { changed: false, version: 0 };
+      const next =
+        ((
+          db.prepare('SELECT MAX(version) AS v FROM message_versions WHERE message_id = ?').get(messageId) as {
+            v: number | null;
+          }
+        ).v ?? 0) + 1;
+      db.prepare(
+        'INSERT INTO message_versions (message_id, version, text, replaced_at) VALUES (?, ?, ?, ?)',
+      ).run(messageId, next, row.text, editedAt);
+      db.prepare('UPDATE messages SET text = ?, edited = 1, edited_at = ? WHERE id = ?').run(
+        newText,
+        editedAt,
+        messageId,
+      );
+      return { changed: true, version: next };
+    })
+    .immediate();
+}
+
+/** Aelterer Name, bleibt fuer bestehende Aufrufer: Bearbeitung mit der aktuellen Zeit. */
 export function updateMessageText(db: Database, messageId: string, text: string): boolean {
+  const known = db.prepare('SELECT 1 FROM messages WHERE id = ?').get(messageId) !== undefined;
+  if (!known) return false;
+  applyMessageEdit(db, messageId, text);
+  db.prepare('UPDATE messages SET edited = 1 WHERE id = ?').run(messageId);
+  return true;
+}
+
+export interface MessageVersion {
+  version: number;
+  text: string | null;
+  replacedAt: number;
+}
+
+/** Fruehere Fassungen einer Nachricht, aelteste zuerst. Der aktuelle Text steht in messages.text. */
+export function listMessageVersions(db: Database, messageId: string): MessageVersion[] {
+  return db
+    .prepare(
+      'SELECT version, text, replaced_at AS replacedAt FROM message_versions WHERE message_id = ? ORDER BY version',
+    )
+    .all(messageId) as MessageVersion[];
+}
+
+/**
+ * "Fuer alle geloescht" markieren (deleted=1, deleted_at). Text und Medien bleiben unveraendert,
+ * ob die Oberflaeche sie zeigt, steuert der Web-Dienst (hide_deleted_content).
+ * Gibt false zurueck, wenn die Nachricht unbekannt ist. deleted_at bleibt beim ersten Zeitpunkt.
+ */
+export function markMessageDeleted(db: Database, messageId: string, at: number = nowSec()): boolean {
+  assertInt('at', at);
   const info = db
-    .prepare('UPDATE messages SET text = ?, edited = 1 WHERE id = ?')
-    .run(text, messageId);
+    .prepare('UPDATE messages SET deleted = 1, deleted_at = COALESCE(deleted_at, ?) WHERE id = ?')
+    .run(at, messageId);
   return info.changes > 0;
 }
 
 /**
- * ERWEITERUNG ueber den Vertrag hinaus: "fuer alle geloescht" markieren (setzt deleted=1).
- * Text und Medien bleiben unveraendert, ob die Oberflaeche sie noch zeigt, entscheidet das
- * Frontend. Gibt false zurueck, wenn die Nachricht unbekannt ist.
+ * Schild setzen oder entfernen. Geschuetzte Nachrichten loescht kein automatischer Lauf (deleteExpired,
+ * Cleanup-Dienst) und kein "Speicher leeren" ohne ausdrueckliche Freigabe. Gibt false zurueck, wenn die
+ * Nachricht unbekannt ist. Ein bestehendes Schild behaelt seinen urspruenglichen Zeitpunkt.
  */
-export function markMessageDeleted(db: Database, messageId: string): boolean {
-  const info = db.prepare('UPDATE messages SET deleted = 1 WHERE id = ?').run(messageId);
+export function setMessageProtected(db: Database, messageId: string, on: boolean, at: number = nowSec()): boolean {
+  assertInt('at', at);
+  const info = on
+    ? db.prepare('UPDATE messages SET protected_at = COALESCE(protected_at, ?) WHERE id = ?').run(at, messageId)
+    : db.prepare('UPDATE messages SET protected_at = NULL WHERE id = ?').run(messageId);
   return info.changes > 0;
+}
+
+/** Anzahl geschuetzter Nachrichten und Summe ihrer fertig geladenen Mediendateien (Bytes). */
+export function countProtected(db: Database): { messages: number; mediaBytes: number } {
+  const r = db
+    .prepare(
+      `SELECT COUNT(*) AS n,
+              COALESCE(SUM(CASE WHEN md.status = 'ready' THEN md.size_bytes END), 0) AS bytes
+         FROM messages m LEFT JOIN media md ON md.message_id = m.id
+        WHERE m.protected_at IS NOT NULL`,
+    )
+    .get() as { n: number; bytes: number };
+  return { messages: r.n, mediaBytes: r.bytes };
+}
+
+// ---------------------------------------------------------------------------
+// Befehle Web -> Ingest
+// ---------------------------------------------------------------------------
+
+export interface IngestCommand {
+  id: number;
+  type: string;
+  payload: unknown;
+  createdAt: number;
+}
+
+/** Legt einen Befehl fuer den Ingest-Dienst ab (der Web-Dienst spricht nie selbst mit WhatsApp). */
+export function enqueueCommand(db: Database, type: string, payload: unknown): number {
+  const info = db
+    .prepare('INSERT INTO ingest_commands (type, payload_json, created_at) VALUES (?, ?, ?)')
+    .run(type, JSON.stringify(payload ?? null), nowSec());
+  return Number(info.lastInsertRowid);
+}
+
+/** Wartende Befehle, aelteste zuerst (hoechstens `limit`). Ein kaputtes payload_json ergibt payload null. */
+export function listCommands(db: Database, limit = 50): IngestCommand[] {
+  const rows = db
+    .prepare('SELECT id, type, payload_json AS p, created_at AS createdAt FROM ingest_commands ORDER BY id LIMIT ?')
+    .all(limit) as { id: number; type: string; p: string; createdAt: number }[];
+  return rows.map((r) => {
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(r.p);
+    } catch {
+      /* payload bleibt null */
+    }
+    return { id: r.id, type: r.type, payload, createdAt: r.createdAt };
+  });
+}
+
+export function deleteCommand(db: Database, id: number): void {
+  db.prepare('DELETE FROM ingest_commands WHERE id = ?').run(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +324,12 @@ const MEDIA_COLUMNS = {
   sizeBytes: 'size_bytes',
   durationSeconds: 'duration_seconds',
   status: 'status',
+  skipReason: 'skip_reason',
+  loadable: 'loadable',
 } as const;
+
+/** Grund, warum eine Mediendatei fehlt (Spalte media.skip_reason). */
+export type SkipReason = 'rule_off' | 'too_large' | 'history' | 'queue_full' | 'retention' | 'failed' | 'link_expired';
 
 /**
  * Setzt die uebergebenen Felder der media-Zeile; fehlt die Zeile, wird sie angelegt
@@ -200,6 +348,10 @@ export function setMediaStatus(
     sizeBytes: number;
     durationSeconds: number;
     status: MediaStatus;
+    /** null loescht den Grund (z. B. wenn die Datei doch geladen wurde). */
+    skipReason: SkipReason | null;
+    /** true = Schluessel liegen im Ingest bereit, "Medium jetzt laden" ist moeglich. */
+    loadable: boolean;
   }>,
 ): void {
   const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
@@ -209,7 +361,7 @@ export function setMediaStatus(
     const col = (MEDIA_COLUMNS as Record<string, string>)[key];
     if (col === undefined) throw new TypeError(`setMediaStatus: unbekanntes Feld '${key}'`);
     cols.push(col);
-    values.push(value);
+    values.push(typeof value === 'boolean' ? (value ? 1 : 0) : value); // better-sqlite3 bindet keine Booleans
   }
 
   db.transaction(() => {
@@ -498,16 +650,24 @@ export function setSetting(db: Database, key: string, value: string): void {
  *    bestehen, die media-Zeile bekommt status 'expired' und file_path/thumbnail_path NULL
  *    (mime_type, size_bytes, duration_seconds bleiben); die bisherigen Pfade stehen ebenfalls
  *    in mediaPathsToDelete.
+ *  - Geschuetzte Nachrichten (protected_at) bleiben samt Medien unberuehrt, ausser includeProtected ist
+ *    genau true. Das ist die ausdrueckliche Ausnahme von der kurzen Aufbewahrung.
  * Pfade werden so zurueckgegeben, wie sie gespeichert sind. Der Cleanup-Dienst muss vor dem
  * Loeschen pruefen, dass jeder Pfad unter dem Medienverzeichnis liegt.
  * Zeiteinheit der Cutoffs = Einheit von wa_timestamp (siehe nowSec-Kommentar).
  */
 export function deleteExpired(
   db: Database,
-  cutoff: { messagesBefore: number; mediaBefore: number },
+  cutoff: { messagesBefore: number; mediaBefore: number; includeProtected?: boolean },
 ): { deletedMessageIds: string[]; mediaPathsToDelete: string[] } {
   assertInt('messagesBefore', cutoff.messagesBefore);
   assertInt('mediaBefore', cutoff.mediaBefore);
+  // Geschuetzte Nachrichten (Schild) bleiben stehen, ausser der Aufrufer gibt sie ausdruecklich frei
+  // (nur "Speicher leeren (auch geschuetzte)"). Die Bausteine sind feste Texte, nie Eingaben.
+  const withProtected = cutoff.includeProtected === true;
+  const unprotected = withProtected ? '' : ' AND protected_at IS NULL';
+  const unprotectedM = withProtected ? '' : ' AND m.protected_at IS NULL';
+  const named = { messagesBefore: cutoff.messagesBefore, mediaBefore: cutoff.mediaBefore };
 
   return db
     .transaction(() => {
@@ -522,38 +682,42 @@ export function deleteExpired(
 
       // 1) Nachrichten, die komplett verschwinden
       const deletedMessageIds = db
-        .prepare('SELECT id FROM messages WHERE wa_timestamp < ? ORDER BY wa_timestamp, id')
+        .prepare(`SELECT id FROM messages WHERE wa_timestamp < ?${unprotected} ORDER BY wa_timestamp, id`)
         .pluck()
         .all(cutoff.messagesBefore) as string[];
       collect(
         db
           .prepare(
             `SELECT file_path AS filePath, thumbnail_path AS thumbnailPath FROM media
-             WHERE message_id IN (SELECT id FROM messages WHERE wa_timestamp < ?)`,
+             WHERE message_id IN (SELECT id FROM messages WHERE wa_timestamp < ?${unprotected})`,
           )
           .all(cutoff.messagesBefore) as PathRow[],
       );
       // media hat laut Vertrag keinen ON DELETE CASCADE: erst media, dann messages.
+      // message_versions geht per ON DELETE CASCADE mit (foreign_keys=ON in openDb).
       db.prepare(
-        'DELETE FROM media WHERE message_id IN (SELECT id FROM messages WHERE wa_timestamp < ?)',
+        `DELETE FROM media WHERE message_id IN (SELECT id FROM messages WHERE wa_timestamp < ?${unprotected})`,
       ).run(cutoff.messagesBefore);
-      db.prepare('DELETE FROM messages WHERE wa_timestamp < ?').run(cutoff.messagesBefore);
+      db.prepare(`DELETE FROM messages WHERE wa_timestamp < ?${unprotected}`).run(cutoff.messagesBefore);
 
       // 2) Medien verbleibender Nachrichten, die frueher ablaufen als die Nachricht
       const expiring = `message_id IN (
           SELECT m.id FROM messages m
-          WHERE m.wa_timestamp >= @messagesBefore AND m.wa_timestamp < @mediaBefore)
+          WHERE m.wa_timestamp >= @messagesBefore AND m.wa_timestamp < @mediaBefore${unprotectedM})
         AND status <> 'expired'`;
       collect(
         db
           .prepare(
             `SELECT file_path AS filePath, thumbnail_path AS thumbnailPath FROM media WHERE ${expiring}`,
           )
-          .all(cutoff) as PathRow[],
+          .all(named) as PathRow[],
       );
+      // loadable=0: nach Ablauf der Medien-Aufbewahrung gibt der Ingest die Schluessel frei (siehe Ingest).
       db.prepare(
-        `UPDATE media SET status = 'expired', file_path = NULL, thumbnail_path = NULL WHERE ${expiring}`,
-      ).run(cutoff);
+        `UPDATE media SET status = 'expired', file_path = NULL, thumbnail_path = NULL, loadable = 0,
+                skip_reason = COALESCE(skip_reason, 'retention')
+          WHERE ${expiring}`,
+      ).run(named);
 
       return { deletedMessageIds, mediaPathsToDelete: [...paths] };
     })
