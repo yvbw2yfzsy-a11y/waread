@@ -1,0 +1,33 @@
+{
+  "name": "@waread/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "waread: SQLite-Schema, Migrationen und Zugriffsmodul",
+  "type": "module",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "main": "dist/client.js",
+  "types": "dist/client.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    }
+  },
+  "files": [
+    "dist",
+    "schema.sql"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test client.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

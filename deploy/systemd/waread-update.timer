@@ -1,0 +1,25 @@
+# waread-update.timer
+#
+# Täglicher Updatelauf gegen 03:00 Uhr Europe/Berlin (plus bis zu 15 Minuten
+# Streuung). ACHTUNG: Dieser Timer wird von install.sh absichtlich NICHT aktiviert.
+# Erst aktivieren, wenn update_source_url (und der Prüfschlüssel) in
+# /etc/waread/config.toml eingetragen und "waread-update --check" von Hand
+# erfolgreich gelaufen ist:
+#
+#     systemctl enable --now waread-update.timer
+#
+# Persistent=false: Wer den Pi nachts ausschaltet, bekommt kein Update zu einer
+# zufälligen Tageszeit nach dem Einschalten; der nächste Lauf ist dann der folgende Morgen um 03:00.
+
+[Unit]
+Description=waread Update täglich gegen 03:00
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Europe/Berlin
+RandomizedDelaySec=15min
+AccuracySec=1min
+Persistent=false
+Unit=waread-update.service
+
+[Install]
+WantedBy=timers.target

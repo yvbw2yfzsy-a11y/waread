@@ -1,0 +1,5 @@
+/* waread – styles entry point. esbuild inlines these imports into dist/styles.css.
+   No webfonts, no external URLs: system font stack only. */
+@import "./styles/base.css";
+@import "./styles/chat.css";
+@import "./styles/views.css";

@@ -1,0 +1,599 @@
+#!/usr/bin/env bash
+# waread-update - Updater für die waread-Programmdateien (läuft als root)
+#
+# Eigenständig und unabhängig von craft-update. Berührt nichts außerhalb von
+# /opt/waread (Releases, current-Symlink, Statusdateien) und startet nur die
+# Dienste waread-ingest und waread-web neu. Es fasst weder /usr/local/bin/craft-update
+# noch /var/lib/craft noch /var/www/craft noch Craft-Units an.
+#
+# Ablauf:
+#   1. Konfiguration lesen (update_source_url u. a. aus /etc/waread/config.toml)
+#   2. Manifest holen und dessen Ed25519-Signatur prüfen
+#   3. Neuere Version? (gleiche Version = aktuell, ältere Version = Downgrade, wird verweigert)
+#   4. Tarball holen, SHA-256 aus dem (signierten) Manifest prüfen, nach
+#      /opt/waread/releases/<version> entpacken (zuerst in ein Staging-Verzeichnis)
+#   5. WhatsApp-Bibliothek (npm-Paket "baileys", früher "@whiskeysockets/baileys") in package-lock.json vergleichen:
+#      Ändert sie sich, wird NICHT aktiviert (Status "manual-review", Exit-Code 3)
+#   6. current-Symlink atomar umschalten, Dienste neu starten, GET /healthz prüfen
+#   7. Bei Fehlschlag automatisch auf die vorherige Version zurückschalten
+#
+# Aufruf:
+#   waread-update [--check] [--retry] [--approve-library-change X.Y.Z]
+#     --check                       nur prüfen, ob ein Update verfügbar ist; ändert nichts
+#     --retry                       eine früher gescheiterte Version erneut versuchen
+#     --approve-library-change V    Änderung der WhatsApp-Bibliothek in genau Version V freigeben
+#
+# Exit-Codes: 0 aktuell/erfolgreich, 1 Fehler oder Rollback, 2 Aufruf/Konfiguration,
+#             3 manuelle Prüfung nötig (Bibliotheksänderung).
+#
+# Statusdateien (root-eigen, in /opt/waread/state/):
+#   update.status          state=, time=, current_version=, target_version=, reason=
+#   update.failed-version  zuletzt gescheiterte Version (wird nicht erneut versucht)
+#   update.review-version  Version, die auf manuelle Prüfung wartet
+#   update.lock            Sperrdatei (gegen parallele Läufe, auch gegen install.sh)
+#
+# Protokoll: Es werden nur Ereignisse, Versionsnummern, Prüfsummen und Fehlermeldungen
+# geschrieben, niemals Nachrichteninhalte (das Skript kommt an keine Nachrichtendaten).
+#
+# Was ein Release enthalten muss (Release-Vertrag) und wie Manifest, Signatur und
+# Schlüssel erzeugt werden: deploy/README.md.
+
+set -Eeuo pipefail
+umask 022
+
+# ---------------------------------------------------------------- Konstanten
+readonly OPT_ROOT="/opt/waread"
+readonly RELEASES_DIR="$OPT_ROOT/releases"
+readonly CURRENT_LINK="$OPT_ROOT/current"
+readonly STATE_DIR="$OPT_ROOT/state"
+readonly STATUS_FILE="$STATE_DIR/update.status"
+readonly FAILED_FILE="$STATE_DIR/update.failed-version"
+readonly REVIEW_FILE="$STATE_DIR/update.review-version"
+readonly LOCK_FILE="$STATE_DIR/update.lock"
+readonly CONFIG_FILE="/etc/waread/config.toml"
+readonly SYSTEMD_DIR="/etc/systemd/system"
+readonly NGINX_SNIPPET_DST="/etc/nginx/snippets/waread.conf"
+readonly UPDATER_DST="/usr/local/sbin/waread-update"
+readonly SERVICE_PATH="/usr/local/bin:/usr/bin:/bin"
+
+# Dienste, die nach einem Wechsel neu gestartet werden (nur wenn aktiviert/aktiv).
+# waread-cleanup und waread-cleanup-vacuum sind Oneshots und nehmen die neue Version
+# beim nächsten Timerlauf von selbst.
+readonly UNITS=(waread-ingest.service waread-web.service)
+readonly DEPLOY_UNITS=(
+  waread-ingest.service waread-web.service waread-cleanup.service waread-cleanup.timer
+  waread-cleanup-vacuum.service waread-cleanup-vacuum.timer waread-update.service waread-update.timer
+)
+
+# Pakete, deren Versionsänderung ein Update anhält (Eintrag in package-lock.json).
+# Das Projekt nutzt "baileys" (services/ingest/package.json); der ältere Paketname
+# "@whiskeysockets/baileys" steht dabei, damit ein Namenswechsel nicht unbemerkt bleibt.
+# Verglichen wird die Menge aller gefundenen Einträge; "NONE" nur, wenn KEINES der Pakete vorkommt.
+readonly WA_LIB_PACKAGES=("baileys" "@whiskeysockets/baileys")
+
+readonly KEEP_RELEASES=3
+
+# Gleicher Vertrag wie in install.sh (siehe README, "Release-Vertrag").
+readonly REQUIRED_RELEASE_FILES=(
+  "services/ingest/dist/index.js"
+  "services/web/dist/server.js"
+  "services/web/public/dist/index.html"
+  "cleanup/dist/cleanup.js"
+  "db/dist/client.js"
+  "db/schema.sql"
+  "config/config.example.toml"
+  "package-lock.json"
+)
+readonly REQUIRED_RELEASE_DIRS=("node_modules" "node_modules/@waread/db")
+
+# Standard-Port 8780 = Festlegung dieses Pakets; siehe README.
+readonly DEFAULT_HEALTH_URL="http://127.0.0.1:8780/healthz"
+
+# Stellschrauben (Umgebungsvariablen sind vor allem für Tests gedacht).
+HEALTH_TIMEOUT=${WAREAD_UPDATE_HEALTH_TIMEOUT:-90}      # Sekunden bis /healthz antworten muss
+STABLE_SECONDS=${WAREAD_UPDATE_STABLE_SECONDS:-20}      # so lange dürfen die Dienste nicht neu starten
+# Erlaubte Protokolle für Manifest/Tarball. Standard NUR https. Nur zum Testen
+# mit lokalem Server: WAREAD_UPDATE_ALLOW_PROTO=http,file
+ALLOW_PROTO=${WAREAD_UPDATE_ALLOW_PROTO:-https}
+
+# ---------------------------------------------------------------- Zustand
+CHECK_ONLY=0
+RETRY=0
+APPROVED_VERSION=""
+SOURCE_URL=""
+REQUIRE_SIG="true"
+PUBKEY_FILE=""
+MAX_BYTES=0
+HEALTH_URL=""
+CURRENT_VERSION=""
+PREV_VERSION=""
+TARGET_VERSION=""
+TARBALL_NAME=""
+TARBALL_SHA=""
+STAGING=""
+SWITCHED=0
+CONFIRMED=0
+ROLLED_BACK=0
+LOCK_HELD=0
+STATUS_SET=0
+FAIL_REASON=""
+ACTIVE_UNITS=()
+
+# ---------------------------------------------------------------- Protokoll und Abbruch
+log() { # log STUFE Text...   (INFO nach stdout, WARN/ERROR nach stderr; Präfix für journald)
+  local lvl=$1 pfx="" stream=1
+  shift
+  case "$lvl" in ERROR) stream=2; pfx='<3>' ;; WARN) stream=2; pfx='<4>' ;; *) pfx='<6>' ;; esac
+  [ -n "${JOURNAL_STREAM:-}" ] || pfx=""
+  if [ "$stream" -eq 2 ]; then
+    printf '%s[waread-update] %s %s\n' "$pfx" "$lvl" "$*" >&2
+  else
+    printf '%s[waread-update] %s %s\n' "$pfx" "$lvl" "$*"
+  fi
+}
+
+fail() { # fail EXITCODE Text...
+  local code=$1
+  shift
+  FAIL_REASON="$*"
+  log ERROR "$*"
+  # Status "failed" nur, wenn wir die Sperre halten, noch nicht umgeschaltet haben (danach
+  # schreibt der Rollback den Status) und nicht schon ein spezifischerer Status gesetzt wurde.
+  if [ "$LOCK_HELD" -eq 1 ] && [ "$SWITCHED" -eq 0 ] && [ "$STATUS_SET" -eq 0 ]; then
+    write_status failed "$TARGET_VERSION" "$FAIL_REASON"
+  fi
+  exit "$code"
+}
+
+now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+active_version() { # Version, auf die current zeigt
+  local t
+  t=$(readlink "$CURRENT_LINK" 2>/dev/null) || return 1
+  basename "$t"
+}
+
+write_status() { # write_status STATE TARGET REASON
+  local tmp reason
+  [ -d "$STATE_DIR" ] || return 0
+  STATUS_SET=1
+  reason=$(printf '%s' "${3:-}" | tr '\r\n' '  ' | cut -c1-300)
+  tmp=$(mktemp "$STATE_DIR/.status.XXXXXX") || return 0
+  {
+    printf 'state=%s\n' "$1"
+    printf 'time=%s\n' "$(now_utc)"
+    printf 'current_version=%s\n' "$(active_version || echo unknown)"
+    printf 'target_version=%s\n' "${2:-}"
+    printf 'reason=%s\n' "$reason"
+  } >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f -- "$tmp" "$STATUS_FILE"
+}
+
+# Löscht nur Verzeichnisse direkt unter /opt/waread/releases/.
+safe_remove_release_tree() {
+  local p=$1
+  case "$p" in
+    "$RELEASES_DIR"/*) ;;
+    *) log ERROR "Interner Fehler: verweigere Löschen außerhalb von $RELEASES_DIR: $p"; return 1 ;;
+  esac
+  case "$p" in *..*|*craft*) log ERROR "Interner Fehler: verweigere Löschen von $p"; return 1 ;; esac
+  rm -rf --one-file-system -- "$p"
+}
+
+# ---------------------------------------------------------------- Konfiguration
+cfg_get() { # cfg_get SCHLÜSSEL [STANDARD]  - sucht "schlüssel = wert" in beliebiger Tabelle
+  local key=$1 def=${2-} out=""
+  if [ -r "$CONFIG_FILE" ]; then
+    out=$(awk -v k="$key" -v q="'" '
+      BEGIN { pat = "^[ \t]*" k "[ \t]*=[ \t]*" }
+      $0 ~ /^[ \t]*#/ { next }
+      match($0, pat) {
+        v = substr($0, RLENGTH + 1)
+        c = substr(v, 1, 1)
+        if (c == "\"") { v = substr(v, 2); i = index(v, "\""); if (i > 0) v = substr(v, 1, i - 1) }
+        else if (c == q) { v = substr(v, 2); i = index(v, q); if (i > 0) v = substr(v, 1, i - 1) }
+        else { sub(/[ \t]*(#.*)?$/, "", v) }
+        print v
+        exit
+      }' "$CONFIG_FILE") || out=""
+  fi
+  if [ -n "$out" ]; then printf '%s' "$out"; else printf '%s' "$def"; fi
+}
+
+is_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+version_gt() { # version_gt A B  -> wahr, wenn A neuer als B
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+load_config() {
+  local v
+  SOURCE_URL=$(cfg_get update_source_url "")
+  if [ -z "$SOURCE_URL" ]; then
+    write_status not-configured "" "update_source_url ist leer"
+    fail 2 "update_source_url ist in $CONFIG_FILE nicht gesetzt. Ohne eine eigene, vertrauenswürdige Quelle gibt es keine automatischen Updates (README, Abschnitt \"Updates\")."
+  fi
+  case "$SOURCE_URL" in
+    *[[:space:]]*|*\?*|*\#*) fail 2 "update_source_url darf keine Leerzeichen, ? oder # enthalten." ;;
+    http://*|https://*|file://*) ;;
+    *) fail 2 "update_source_url muss mit https:// beginnen." ;;
+  esac
+
+  v=$(cfg_get update_require_signature "true")
+  case "$(printf '%s' "$v" | tr 'A-Z' 'a-z')" in
+    true) REQUIRE_SIG="true" ;;
+    false) REQUIRE_SIG="false" ;;
+    *) fail 2 "update_require_signature muss true oder false sein." ;;
+  esac
+  PUBKEY_FILE=$(cfg_get update_pubkey_file "/etc/waread/update-pubkey.pem")
+
+  v=$(cfg_get update_max_download_mb "300")
+  [[ $v =~ ^[0-9]{1,5}$ ]] && [ "$v" -ge 1 ] || fail 2 "update_max_download_mb muss eine positive ganze Zahl sein."
+  MAX_BYTES=$((v * 1024 * 1024))
+
+  HEALTH_URL=$(cfg_get update_health_url "$DEFAULT_HEALTH_URL")
+  [[ $HEALTH_URL =~ ^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?/[A-Za-z0-9._/-]*$ ]] \
+    || fail 2 "update_health_url muss eine http://-Adresse auf 127.0.0.1, localhost oder [::1] sein."
+
+  [[ $HEALTH_TIMEOUT =~ ^[0-9]{1,4}$ ]] || fail 2 "WAREAD_UPDATE_HEALTH_TIMEOUT ungültig."
+  [[ $STABLE_SECONDS =~ ^[0-9]{1,4}$ ]] || fail 2 "WAREAD_UPDATE_STABLE_SECONDS ungültig."
+  [[ $ALLOW_PROTO =~ ^[a-z]+(,[a-z]+)*$ ]] || fail 2 "WAREAD_UPDATE_ALLOW_PROTO ungültig."
+
+  if [ "$REQUIRE_SIG" = "true" ]; then
+    command -v openssl >/dev/null 2>&1 || fail 2 "openssl fehlt, wird für die Signaturprüfung gebraucht."
+    openssl pkeyutl -help 2>&1 | grep -q -- '-rawin' \
+      || fail 2 "Dieses OpenSSL kennt 'pkeyutl -rawin' nicht (OpenSSL 3.0 oder neuer nötig) und kann Ed25519 nicht prüfen."
+    [ -r "$PUBKEY_FILE" ] \
+      || fail 2 "Öffentlicher Schlüssel $PUBKEY_FILE fehlt oder ist nicht lesbar (update_pubkey_file)."
+  else
+    log WARN "update_require_signature = false: Updates werden NUR per Prüfsumme aus dem Manifest geprüft. Eine Prüfsumme von derselben Quelle schützt nicht vor einer manipulierten Quelle."
+  fi
+}
+
+# ---------------------------------------------------------------- Netzwerk und Prüfungen
+fetch() { # fetch URL ZIELDATEI MAXBYTES TIMEOUT_SEKUNDEN
+  curl --fail --silent --show-error --location --max-redirs 5 \
+       --proto "=${ALLOW_PROTO}" --proto-redir "=${ALLOW_PROTO}" \
+       --connect-timeout 15 --max-time "$4" --retry 2 --retry-delay 5 \
+       --max-filesize "$3" --user-agent "waread-update" \
+       --output "$2" -- "$1"
+}
+
+manifest_get() { # manifest_get DATEI SCHLÜSSEL  (reine Textauswertung, nie "source")
+  awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); gsub(/\r/, ""); print; exit }' "$1"
+}
+
+verify_signature() { # verify_signature DATEI SIGNATURDATEI
+  openssl pkeyutl -verify -pubin -inkey "$PUBKEY_FILE" -rawin -in "$1" -sigfile "$2" >/dev/null 2>&1
+}
+
+# Liefert "wa-lib=name@version,name@version" (sortiert) oder "wa-lib=NONE", wenn keines der Pakete vorkommt.
+wa_lib_versions() { # wa_lib_versions PACKAGE-LOCK.JSON
+  env PATH="$SERVICE_PATH" node -e '
+    const fs = require("fs");
+    const [file, ...pkgs] = process.argv.slice(1);
+    let lock;
+    try { lock = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { process.exit(3); }
+    const found = new Set();
+    for (const p of pkgs) {
+      const packages = lock.packages || {};
+      for (const key of Object.keys(packages)) {
+        if (key === "node_modules/" + p || key.endsWith("/node_modules/" + p)) {
+          if (packages[key] && packages[key].version) found.add(p + "@" + packages[key].version);
+        }
+      }
+      const deps = lock.dependencies || {};
+      if (deps[p] && deps[p].version) found.add(p + "@" + deps[p].version);
+    }
+    console.log("wa-lib=" + (found.size ? [...found].sort().join(",") : "NONE"));
+  ' "$1" "${WA_LIB_PACKAGES[@]}"
+}
+
+# ---------------------------------------------------------------- Dienste und Gesundheit
+switch_current() { # switch_current VERSION  (atomar: neuer Symlink, dann rename)
+  local v=$1 tmp="$OPT_ROOT/.current.new.$$"
+  rm -f -- "$tmp"
+  ln -s "releases/$v" "$tmp" && mv -T -- "$tmp" "$CURRENT_LINK"
+}
+
+restart_services() {
+  local u
+  ACTIVE_UNITS=()
+  for u in "${UNITS[@]}"; do
+    if systemctl is-enabled --quiet "$u" 2>/dev/null || systemctl is-active --quiet "$u" 2>/dev/null; then
+      ACTIVE_UNITS+=("$u")
+    fi
+  done
+  if [ "${#ACTIVE_UNITS[@]}" -eq 0 ]; then
+    log ERROR "Keine der Dienste ${UNITS[*]} ist aktiviert oder aktiv; es gibt nichts neu zu starten."
+    return 1
+  fi
+  for u in "${ACTIVE_UNITS[@]}"; do
+    log INFO "Starte $u neu"
+    systemctl restart "$u" || { log ERROR "Neustart von $u fehlgeschlagen"; return 1; }
+  done
+}
+
+health_ok() {
+  local code
+  code=$(curl -sS --max-time 5 --proto '=http' -o /dev/null -w '%{http_code}' "$HEALTH_URL" 2>/dev/null) || code=000
+  [ "$code" = "200" ]
+}
+
+wait_healthy() {
+  local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  while :; do
+    if health_ok; then return 0; fi
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 3
+  done
+}
+
+# Nach erfolgreichem /healthz: STABLE_SECONDS lang beobachten, ob ein Dienst neu startet
+# (neue InvocationID) oder ausfällt. Fängt Absturzschleifen, die /healthz kurz überleben.
+stable_check() {
+  local u ids=() i=0 now
+  for u in "${ACTIVE_UNITS[@]}"; do
+    ids+=("$(systemctl show -p InvocationID --value "$u" 2>/dev/null || true)")
+  done
+  sleep "$STABLE_SECONDS"
+  for u in "${ACTIVE_UNITS[@]}"; do
+    now=$(systemctl show -p InvocationID --value "$u" 2>/dev/null || true)
+    if [ "$now" != "${ids[$i]}" ]; then log ERROR "$u wurde innerhalb von ${STABLE_SECONDS}s neu gestartet"; return 1; fi
+    systemctl is-active --quiet "$u" || { log ERROR "$u ist nicht mehr aktiv"; return 1; }
+    i=$((i + 1))
+  done
+  health_ok || { log ERROR "/healthz antwortet nach der Beobachtungszeit nicht mehr"; return 1; }
+}
+
+rollback() {
+  [ "$ROLLED_BACK" -eq 0 ] || return 0
+  ROLLED_BACK=1
+  if [ -z "$PREV_VERSION" ] || [ ! -d "$RELEASES_DIR/$PREV_VERSION" ]; then
+    log ERROR "Rollback nicht möglich: vorherige Version '$PREV_VERSION' fehlt."
+    write_status failed "$TARGET_VERSION" "Rollback nicht möglich; manuell prüfen"
+    return 1
+  fi
+  log ERROR "Schalte zurück auf $PREV_VERSION"
+  if ! switch_current "$PREV_VERSION"; then
+    log ERROR "Umschalten auf $PREV_VERSION fehlgeschlagen; manuell prüfen"
+    write_status failed "$TARGET_VERSION" "Rollback-Symlink fehlgeschlagen"
+    return 1
+  fi
+  restart_services || true
+  if wait_healthy; then
+    log INFO "Nach dem Rollback antwortet /healthz wieder"
+  else
+    log ERROR "Auch nach dem Rollback antwortet /healthz nicht. Manuell prüfen: journalctl -u waread-web -u waread-ingest"
+  fi
+  if is_version "$TARGET_VERSION"; then
+    printf '%s\n' "$TARGET_VERSION" >"$FAILED_FILE"
+    [ "$TARGET_VERSION" != "$PREV_VERSION" ] && [ -d "$RELEASES_DIR/$TARGET_VERSION" ] \
+      && safe_remove_release_tree "$RELEASES_DIR/$TARGET_VERSION"
+  fi
+  write_status rolled-back "$TARGET_VERSION" "${FAIL_REASON:-Update gescheitert}"
+  return 0
+}
+
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  # Bricht das Skript nach dem Umschalten ab (Fehler, SIGTERM), bleibt es nie auf einer ungeprüften Version.
+  if [ "$SWITCHED" -eq 1 ] && [ "$CONFIRMED" -eq 0 ]; then rollback || true; fi
+  if [ -n "$STAGING" ] && [ -d "$STAGING" ]; then safe_remove_release_tree "$STAGING" || true; fi
+  exit "$rc"
+}
+
+# ---------------------------------------------------------------- Aufräumen und Hinweise
+prune_releases() { # behält die neuesten KEEP_RELEASES sowie current und die vorherige Version
+  local v i=0 cur
+  cur=$(active_version || true)
+  while IFS= read -r v; do
+    i=$((i + 1))
+    if [ "$i" -le "$KEEP_RELEASES" ] || [ "$v" = "$cur" ] || [ "$v" = "$PREV_VERSION" ]; then continue; fi
+    log INFO "Entferne altes Release $v"
+    safe_remove_release_tree "$RELEASES_DIR/$v" || true
+  done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9]+\.[0-9]+\.[0-9]+' -printf '%f\n' | sort -rV)
+}
+
+notice_deploy_changes() { # notice_deploy_changes RELEASE-VERZEICHNIS
+  local rel=$1 u changed=()
+  for u in "${DEPLOY_UNITS[@]}"; do
+    if [ -f "$rel/deploy/systemd/$u" ] && ! cmp -s "$rel/deploy/systemd/$u" "$SYSTEMD_DIR/$u"; then changed+=("$u"); fi
+  done
+  if [ -f "$rel/deploy/waread-update" ] && ! cmp -s "$rel/deploy/waread-update" "$UPDATER_DST"; then changed+=("waread-update"); fi
+  if [ -f "$rel/deploy/nginx/waread.conf" ] && [ -f "$NGINX_SNIPPET_DST" ] \
+     && ! cmp -s "$rel/deploy/nginx/waread.conf" "$NGINX_SNIPPET_DST"; then changed+=("nginx/waread.conf"); fi
+  if [ "${#changed[@]}" -gt 0 ]; then
+    log WARN "Das neue Release bringt geänderte Deployment-Dateien mit (${changed[*]}). Dieses Skript installiert sie NICHT. Bei Bedarf von Hand: $rel/deploy/install.sh"
+  fi
+}
+
+# ---------------------------------------------------------------- Argumente
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) CHECK_ONLY=1; shift ;;
+      --retry) RETRY=1; shift ;;
+      --approve-library-change)
+        [ $# -ge 2 ] || fail 2 "--approve-library-change braucht eine Version (X.Y.Z)"
+        is_version "$2" || fail 2 "--approve-library-change: ungültige Version '$2'"
+        APPROVED_VERSION=$2; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) fail 2 "Unbekannte Option: $1 (siehe --help)" ;;
+    esac
+  done
+}
+
+check_deps() {
+  local c
+  for c in curl tar sha256sum flock node sort awk systemctl find cmp mktemp readlink df stat; do
+    command -v "$c" >/dev/null 2>&1 || fail 2 "Benötigtes Programm fehlt: $c"
+  done
+}
+
+# ---------------------------------------------------------------- Hauptablauf
+main() {
+  parse_args "$@"
+  [ "$(id -u)" -eq 0 ] || fail 2 "Muss als root laufen."
+  check_deps
+  [ -d "$STATE_DIR" ] && [ -d "$RELEASES_DIR" ] \
+    || fail 2 "$STATE_DIR bzw. $RELEASES_DIR fehlt. Ist waread mit install.sh installiert?"
+
+  # Sperre gegen parallele Läufe (auch gegen install.sh).
+  exec 9>"$LOCK_FILE"
+  chmod 0600 "$LOCK_FILE"
+  flock -n 9 || fail 1 "Ein anderer waread-update- oder install.sh-Lauf ist aktiv."
+  LOCK_HELD=1
+
+  trap on_exit EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+
+  # Reste eines abgebrochenen Laufs (wir halten die Sperre, es läuft also keiner).
+  local s
+  for s in "$RELEASES_DIR"/.staging.*; do
+    [ -d "$s" ] && safe_remove_release_tree "$s"
+  done
+
+  load_config
+
+  CURRENT_VERSION=$(active_version) || fail 2 "$CURRENT_LINK ist kein gültiger Symlink. Ist waread mit install.sh installiert?"
+  is_version "$CURRENT_VERSION" || fail 2 "Aktuelle Version '$CURRENT_VERSION' hat nicht das Format X.Y.Z."
+  PREV_VERSION=$CURRENT_VERSION
+  log INFO "Aktuell installiert: $CURRENT_VERSION"
+
+  # --- Manifest und Signatur --------------------------------------------------
+  STAGING=$(mktemp -d "$RELEASES_DIR/.staging.XXXXXX")
+  local manifest="$STAGING/manifest" sig="$STAGING/manifest.sig"
+  log INFO "Hole Manifest"
+  fetch "$SOURCE_URL" "$manifest" 65536 60 || fail 1 "Manifest konnte nicht geladen werden."
+
+  if [ "$REQUIRE_SIG" = "true" ]; then
+    fetch "${SOURCE_URL}.sig" "$sig" 1024 60 || fail 1 "Signatur ${SOURCE_URL}.sig konnte nicht geladen werden."
+    verify_signature "$manifest" "$sig" \
+      || fail 1 "Signatur des Manifests ist UNGÜLTIG. Abbruch; es wurde nichts verändert."
+    log INFO "Signatur des Manifests gültig"
+  fi
+
+  TARGET_VERSION=$(manifest_get "$manifest" version)
+  TARBALL_NAME=$(manifest_get "$manifest" tarball)
+  TARBALL_SHA=$(manifest_get "$manifest" sha256)
+  is_version "$TARGET_VERSION"            || fail 1 "Manifest: ungültige version '$TARGET_VERSION' (erwartet X.Y.Z)."
+  [[ $TARBALL_NAME =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+                                          || fail 1 "Manifest: tarball muss ein einfacher Dateiname sein."
+  [[ $TARBALL_SHA =~ ^[0-9a-f]{64}$ ]]    || fail 1 "Manifest: sha256 muss 64 Kleinbuchstaben-Hexzeichen sein."
+
+  # --- Entscheidung -------------------------------------------------------------
+  if [ "$TARGET_VERSION" = "$CURRENT_VERSION" ]; then
+    log INFO "Bereits aktuell ($CURRENT_VERSION)."
+    write_status up-to-date "$TARGET_VERSION" "bereits aktuell"
+    exit 0
+  fi
+  if ! version_gt "$TARGET_VERSION" "$CURRENT_VERSION"; then
+    write_status failed "$TARGET_VERSION" "Quelle bietet ältere Version an (Downgrade verweigert)"
+    fail 1 "Quelle bietet $TARGET_VERSION an, installiert ist $CURRENT_VERSION. Downgrade wird verweigert."
+  fi
+  if [ "$RETRY" -eq 0 ] && [ -f "$FAILED_FILE" ] && [ "$(cat "$FAILED_FILE")" = "$TARGET_VERSION" ]; then
+    fail 1 "Version $TARGET_VERSION ist früher gescheitert und wird nicht automatisch erneut versucht (--retry zum Erzwingen)."
+  fi
+  if [ -f "$REVIEW_FILE" ] && [ "$(cat "$REVIEW_FILE")" = "$TARGET_VERSION" ] && [ "$APPROVED_VERSION" != "$TARGET_VERSION" ]; then
+    log WARN "Version $TARGET_VERSION wartet auf manuelle Prüfung (WhatsApp-Bibliothek geändert). Nach der Prüfung: waread-update --approve-library-change $TARGET_VERSION"
+    exit 3
+  fi
+  log INFO "Update verfügbar: $CURRENT_VERSION -> $TARGET_VERSION"
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    log INFO "--check: Es wird nichts heruntergeladen oder verändert."
+    exit 0
+  fi
+
+  [ ! -e "$RELEASES_DIR/$TARGET_VERSION" ] \
+    || fail 1 "$RELEASES_DIR/$TARGET_VERSION existiert bereits (kein Überschreiben). Bitte von Hand prüfen oder entfernen."
+
+  # --- Download und Prüfsumme ---------------------------------------------------
+  local tarball="$STAGING/release.tar.gz" base size avail_kb
+  base=${SOURCE_URL%/*}
+  log INFO "Lade ${TARBALL_NAME} (höchstens $((MAX_BYTES / 1024 / 1024)) MiB)"
+  fetch "$base/$TARBALL_NAME" "$tarball" "$MAX_BYTES" 1800 || fail 1 "Tarball konnte nicht geladen werden."
+  size=$(stat -c %s "$tarball")
+  [ "$size" -le "$MAX_BYTES" ] || fail 1 "Tarball ist größer als update_max_download_mb."
+  [ "$(sha256sum "$tarball" | cut -d' ' -f1)" = "$TARBALL_SHA" ] \
+    || fail 1 "SHA-256 des Tarballs stimmt nicht mit dem Manifest überein. Abbruch; es wurde nichts verändert."
+  log INFO "SHA-256 stimmt"
+
+  avail_kb=$(df -Pk "$RELEASES_DIR" | awk 'NR == 2 { print $4 }')
+  [ "${avail_kb:-0}" -ge $((size * 4 / 1024)) ] \
+    || fail 1 "Zu wenig freier Platz in $RELEASES_DIR (benötigt etwa das Vierfache des Tarballs)."
+
+  # --- Entpacken (in Staging) --------------------------------------------------
+  tar -tzf "$tarball" | awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad = 1 } END { exit bad }' \
+    || fail 1 "Tarball enthält absolute Pfade oder '..'. Abbruch."
+  tar -tvzf "$tarball" | awk 'substr($0, 1, 1) ~ /[cbp]/ { bad = 1 } END { exit bad }' \
+    || fail 1 "Tarball enthält Geräte- oder FIFO-Dateien. Abbruch."
+  local tree="$STAGING/tree"
+  mkdir "$tree"
+  tar -xzf "$tarball" -C "$tree" --no-same-owner || fail 1 "Entpacken fehlgeschlagen."
+  rm -f -- "$tarball"
+  # setuid/setgid VOR dem chown prüfen: chown unter Linux löscht diese Bits stillschweigend,
+  # die Prüfung käme sonst zu spät und würde nie etwas finden.
+  [ -z "$(find "$tree" -perm /6000 -print -quit)" ] || fail 1 "Release enthält setuid/setgid-Dateien. Abbruch."
+  chown -R root:root "$tree"
+  chmod -R go-w "$tree"
+  chmod -R a+rX "$tree"
+  local bad_link
+  bad_link=$(find "$tree" -type l -exec readlink -m -- {} + | awk -v t="$tree" 'index($0, t "/") != 1 && $0 != t { print; exit }')
+  [ -z "$bad_link" ] || fail 1 "Release enthält einen Symlink, der aus dem Release herauszeigt. Abbruch."
+
+  local f missing=""
+  for f in "${REQUIRED_RELEASE_FILES[@]}"; do [ -f "$tree/$f" ] || missing="$missing $f"; done
+  for f in "${REQUIRED_RELEASE_DIRS[@]}"; do [ -d "$tree/$f" ] || missing="$missing $f/"; done
+  [ -z "$missing" ] || fail 1 "Release erfüllt den Release-Vertrag nicht, es fehlt:$missing"
+  if [ -f "$tree/VERSION" ]; then
+    [ "$(tr -d ' \t\r\n' <"$tree/VERSION")" = "$TARGET_VERSION" ] \
+      || fail 1 "Die Datei VERSION im Release passt nicht zur Version im Manifest."
+  fi
+
+  # --- WhatsApp-Bibliothek: Änderung hält das Update an --------------------------
+  local cur_wa new_wa
+  cur_wa=$(wa_lib_versions "$CURRENT_LINK/package-lock.json" 2>/dev/null) || cur_wa="UNBEKANNT"
+  new_wa=$(wa_lib_versions "$tree/package-lock.json" 2>/dev/null) || new_wa="UNBEKANNT"
+  if [ "$cur_wa" != "$new_wa" ] || [[ $cur_wa == *NONE* ]] || [[ $cur_wa == *UNBEKANNT* ]]; then
+    if [ "$APPROVED_VERSION" = "$TARGET_VERSION" ]; then
+      log WARN "Änderung der WhatsApp-Bibliothek ($cur_wa -> $new_wa) wurde für $TARGET_VERSION ausdrücklich freigegeben."
+    else
+      printf '%s\n' "$TARGET_VERSION" >"$REVIEW_FILE"
+      write_status manual-review "$TARGET_VERSION" "WhatsApp-Bibliothek: $cur_wa -> $new_wa"
+      log WARN "UPDATE ANGEHALTEN: Die WhatsApp-Bibliothek hat sich geändert oder lässt sich nicht vergleichen ($cur_wa -> $new_wa)."
+      log WARN "Es wurde nichts aktiviert. Version $TARGET_VERSION nach manueller Prüfung freigeben mit: waread-update --approve-library-change $TARGET_VERSION"
+      exit 3
+    fi
+  else
+    log INFO "WhatsApp-Bibliothek unverändert ($new_wa)"
+  fi
+
+  # --- Aktivieren -------------------------------------------------------------
+  mv -T -- "$tree" "$RELEASES_DIR/$TARGET_VERSION"
+  safe_remove_release_tree "$STAGING"
+  STAGING=""
+  log INFO "Release $TARGET_VERSION nach $RELEASES_DIR/$TARGET_VERSION entpackt"
+  notice_deploy_changes "$RELEASES_DIR/$TARGET_VERSION"
+
+  log INFO "Schalte current auf $TARGET_VERSION"
+  SWITCHED=1
+  switch_current "$TARGET_VERSION" || fail 1 "Umschalten des current-Symlinks fehlgeschlagen."
+  restart_services || fail 1 "Neustart der Dienste fehlgeschlagen."
+  wait_healthy || fail 1 "GET $HEALTH_URL antwortet nicht innerhalb von ${HEALTH_TIMEOUT}s."
+  log INFO "/healthz antwortet; beobachte die Dienste ${STABLE_SECONDS}s"
+  stable_check || fail 1 "Dienste sind nach dem Update nicht stabil."
+
+  CONFIRMED=1
+  rm -f -- "$FAILED_FILE" "$REVIEW_FILE"
+  write_status ok "$TARGET_VERSION" "aktualisiert von $PREV_VERSION"
+  log INFO "Update auf $TARGET_VERSION erfolgreich"
+  prune_releases
+}
+
+main "$@"

@@ -1,0 +1,85 @@
+/* Search, settings, connection/QR, login and toasts. */
+
+/* ---------- search ---------- */
+
+.search-form { padding: 0 14px 6px; }
+.search-box {
+  display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg-elev); color: var(--text-dim);
+}
+.search-box .field { padding: 12px 0; border: 0; background: transparent; color: var(--text); }
+.search-box .field:focus-visible { outline: none; }
+.filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.filter-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
+.results { padding-bottom: 8px; }
+.results .count { margin: 6px 16px; }
+.chat-preview.wrap { -webkit-line-clamp: 3; }
+
+/* ---------- cards and forms (settings, connection) ---------- */
+
+.card { margin: 0 0 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg-elev); }
+.card h2 { margin: 0 0 10px; font-size: 17px; }
+.card h3 { margin: 16px 0 6px; font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); }
+.card p { margin: 0 0 8px; }
+.form-row { display: grid; grid-template-columns: 1fr minmax(150px, 50%); align-items: center; gap: 10px; margin: 8px 0; }
+.form-label small { display: block; font-size: 12px; color: var(--text-dim); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.switch-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.switch-row input[type="checkbox"] { flex: none; width: 22px; height: 22px; accent-color: #4aa0d8; }
+.warn { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 0; color: #ffb020; font-size: 14px; }
+.warn .icon { margin-top: 2px; }
+
+.status-line { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 18px; }
+
+.meter { height: 8px; margin-top: 4px; border-radius: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.1); }
+.meter i { display: block; height: 100%; background: #4aa0d8; }
+.meter.high i { background: #ff9f43; }
+.usage-row { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; margin: 8px 0; }
+.usage-row .meter { grid-column: 1 / -1; }
+
+.danger-zone { border-color: rgba(255, 107, 107, 0.35); }
+.confirm-panel { margin-top: 12px; padding: 12px; border: 1px solid rgba(255, 107, 107, 0.4); border-radius: 12px; background: rgba(255, 107, 107, 0.06); }
+.confirm-panel p { margin: 0 0 10px; font-size: 14px; }
+
+/* ---------- QR / connection ---------- */
+
+.qr-box {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  min-height: 220px; margin: 8px 0 14px; padding: 16px; border-radius: 16px; background: var(--bg-elev); text-align: center;
+}
+.qr { width: min(78vw, 300px); height: auto; padding: 12px; border-radius: 12px; background: #fff; }
+.steps { padding-left: 22px; color: var(--text-dim); line-height: 1.55; }
+
+/* ---------- login ---------- */
+
+.login-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login-card { display: flex; flex-direction: column; gap: 12px; width: min(360px, 100%); text-align: center; }
+.login-card h1 { margin: 0; font-size: 28px; }
+.login-card p { margin: 0; }
+.login-logo {
+  display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; margin: 0 auto;
+  border-radius: 50%; background: var(--bubble-out);
+}
+.form-error { margin: 0; color: #ff8a8a; font-size: 14px; }
+
+/* ---------- toasts ---------- */
+
+.toasts {
+  position: fixed; z-index: 100; left: 0; right: 0; bottom: calc(100px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.toast {
+  max-width: 90vw; padding: 10px 16px; border-radius: 14px; font-size: 14px;
+  background: rgba(50, 52, 54, 0.96); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  animation: toast-in 0.2s ease-out;
+}
+.toast.out { opacity: 0; transition: opacity 0.25s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.inline-controls { display: flex; gap: 6px; }
+.inline-controls .field { flex: 1 1 0; min-width: 0; }
+
+/* Passkey lock */
+.login-card-form { display: flex; flex-direction: column; gap: 12px; }
+.passkey-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
+.passkey-row .btn { flex: none; padding: 7px 12px; font-size: 14px; }
+.confirm-panel.notice { border-color: rgba(74, 160, 216, 0.45); background: rgba(74, 160, 216, 0.07); }

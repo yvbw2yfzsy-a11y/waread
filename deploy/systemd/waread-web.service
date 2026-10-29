@@ -1,0 +1,67 @@
+# waread-web.service
+#
+# Web-Backend und ausgeliefertes Frontend. Lauscht nur auf 127.0.0.1; erreichbar
+# im Heimnetz ausschließlich über den Nginx-Pfad /waread/ (deploy/nginx/waread.conf).
+#
+# Release-Vertrag (deploy/README.md, Abschnitt "Release-Vertrag"):
+#   - Einstiegspunkt:  /opt/waread/current/services/web/dist/server.js (npm run build)
+#   - Der Dienst liest seine Konfiguration selbst aus /etc/waread/config.toml. Die Bind-Adresse ist fest
+#     127.0.0.1; der Port steht in [web] port (Annahme dieses Pakets: 8780, config/config.example.toml).
+
+[Unit]
+Description=waread Web-Oberfläche (nur 127.0.0.1)
+After=network.target
+AssertPathExists=/etc/waread/config.toml
+AssertPathExists=/opt/waread/current/services/web/dist/server.js
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=waread
+Group=waread
+UMask=0077
+WorkingDirectory=/opt/waread/current
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/waread/current/services/web/dist/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+SyslogIdentifier=waread-web
+
+# Ressourcen (ungetestete Startwerte). Kein Nice/IOSchedulingClass: Die Oberfläche
+# soll auch dann flott antworten, wenn der Pi gerade etwas anderes tut.
+MemoryHigh=192M
+MemoryMax=256M
+
+# Hardening (Sicherheits-Baseline)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waread
+# Die WhatsApp-Sitzung (auth/) gehoert allein dem Ingest-Dienst. Dieser Dienst braucht sie nicht; sollte er
+# uebernommen werden, soll er sie nicht lesen koennen. Bewusst ohne "-": fehlt der Pfad, soll der Start
+# laut scheitern statt still ungeschuetzt zu laufen (install.sh legt auth/ vorher an).
+# Die Wirkung ist NICHT auf einem Pi getestet; Kontrolle: deploy/README.md, Abschnitt "Sitzung abschirmen".
+InaccessiblePaths=/var/lib/waread/auth
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Netz: Das Konzept verlangt, dem Web-Dienst jeden ausgehenden Verkehr zu verbieten. Erlaubt ist nur
+# Loopback (Nginx -> 127.0.0.1:<port>, SSE). Diese zwei Zeilen sind NICHT auf einem Pi getestet.
+# Antwortet waread nach dem Einspielen mit 502, zuerst diese Zeilen auskommentieren und neu starten.
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Bewusst NICHT gesetzt: MemoryDenyWriteExecute (bricht V8-JIT), SystemCallFilter,
+# RestrictAddressFamilies (ohne Test auf dem Zielgerät zu riskant).
+
+[Install]
+WantedBy=multi-user.target

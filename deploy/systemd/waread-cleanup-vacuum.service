@@ -1,0 +1,58 @@
+# waread-cleanup-vacuum.service
+#
+# Wöchentliches VACUUM der SQLite-Datenbank. Wird von waread-cleanup-vacuum.timer
+# gestartet. Diese Datei gehört NICHT zur ursprünglich aufgelisteten Abgabe, ist aber
+# nötig: Ein Timer startet immer genau eine Unit. Ohne eigene Unit würde der zweite
+# Timer nur den stündlichen Aufräumlauf wiederholen und nie ein VACUUM auslösen.
+#
+# Der Cleanup-Dienst (cleanup/cleanup.ts, gebaut nach cleanup/dist/cleanup.js) führt mit dem Argument
+# --vacuum nach dem normalen Aufräumen ein VACUUM aus und beendet sich danach.
+# Datenbank und Medienordner stammen aus [paths] in /etc/waread/config.toml.
+
+# Nicht gesetzt: TMPDIR. SQLite legt beim VACUUM eine temporäre Kopie der Datenbank an;
+# sie soll auf der Platte im privaten /tmp landen und nicht in einem evtl. kleinen tmpfs.
+
+[Unit]
+Description=waread Datenbank-VACUUM (wöchentlich)
+AssertPathExists=/etc/waread/config.toml
+AssertPathExists=/opt/waread/current/cleanup/dist/cleanup.js
+
+[Service]
+Type=oneshot
+User=waread
+Group=waread
+UMask=0077
+WorkingDirectory=/opt/waread/current
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Gleiche Sperrdatei wie waread-cleanup.service: nie beide gleichzeitig.
+ExecStart=/usr/bin/flock --timeout 3600 --conflict-exit-code 75 /var/lib/waread/tmp/cleanup.lock /usr/bin/env node /opt/waread/current/cleanup/dist/cleanup.js --vacuum
+TimeoutStartSec=2h
+SyslogIdentifier=waread-vacuum
+
+MemoryMax=256M
+Nice=15
+IOSchedulingClass=idle
+
+# Hardening (Sicherheits-Baseline)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waread
+# Die WhatsApp-Sitzung (auth/) gehoert allein dem Ingest-Dienst. Dieser Dienst braucht sie nicht; sollte er
+# uebernommen werden, soll er sie nicht lesen koennen. Bewusst ohne "-": fehlt der Pfad, soll der Start
+# laut scheitern statt still ungeschuetzt zu laufen (install.sh legt auth/ vorher an).
+# Die Wirkung ist NICHT auf einem Pi getestet; Kontrolle: deploy/README.md, Abschnitt "Sitzung abschirmen".
+InaccessiblePaths=/var/lib/waread/auth
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Netz: Das Konzept sieht fuer das Aufraeumen keinen Netzverkehr vor. NICHT auf einem Pi getestet.
+IPAddressDeny=any
