@@ -102,7 +102,7 @@ Gerechnet ohne die Unschärfe, die den Untergrund zusätzlich ausgleicht. Über 
 | Idee | Warum nicht |
 | --- | --- |
 | Griff (Grabber) am Sheet | Ein Griff zeigt an, dass sich das Sheet ziehen lässt (`sheets.md` › Mobile: „Include a grabber in a resizable sheet. A grabber shows people that they can drag the sheet to resize it“). Die Sheets lassen sich weder ziehen noch wegwischen; ein Griff wäre ein falsches Versprechen. Wegwischen nach unten wäre eine neue Geste (Regel „kein neuer Funktionsumfang“). Wenn gewünscht: zuerst die Geste, dann den Griff. |
-| Inhalt unter Chat-Kopf und Fußleiste scrollen lassen | Erst dann zeigt das Glas etwas. HIG (`layout.md` › Visual hierarchy): „Instead of applying a solid or semi-opaque background color beneath controls, use a scroll edge effect“. Das verlangt, Kopfzeile, Neu-Leiste und Fußleiste über den Nachrichtenbereich zu legen, also eine Layout-Änderung, und den Test „Leiste liegt direkt unter der Kopfzeile“ neu zu denken. |
+| Inhalt unter Chat-Kopf und Fußleiste scrollen lassen | Erst dann wäre die weiche Kante im Chat ein echter „scroll edge effect“ (`scroll-views.md` › Scroll edge effects: „Only use a scroll edge effect when a scroll view is behind floating interface elements“). Hindernis außer der Layout-Änderung: Die Gesehen-Erkennung (`seenTracker.ts`, IntersectionObserver auf den Nachrichtenbereich) würde Nachrichten unter der Kopfzeile nach 1 s als gesehen zählen, obwohl sie verdeckt sind, und der Sprung zur ersten neuen Nachricht (`offsetTop - 70`) landet unter der Kopfzeile. Beides braucht TypeScript-Änderungen. |
 | Schalter rechts in der Zeile | So steht es in iOS-Einstellungen. Wäre eine Verschiebung („nichts wandern“). |
 | Dynamic Type | Mit `font: -apple-system-body` und `rem`-Größen würde die Schrift der iOS-Einstellung „Textgröße“ folgen (`typography.md` › Supporting Dynamic Type). Nicht in Chromium prüfbar, und große Stufen (bis 53 pt) würden das Layout spürbar verändern. |
 | Mitlaufende Datumskapsel (`position: sticky`) | Wie in WhatsApp. Ändert, was beim Scrollen sichtbar bleibt; eher Verhalten als Gestaltung. |
@@ -113,3 +113,21 @@ Gerechnet ohne die Unschärfe, die den Untergrund zusätzlich ausgleicht. Über 
 | „Transkribieren“ | Neue Funktion (Spracherkennung), kein Gestaltungsthema. |
 | SF Pro als eingebettete Schriftdatei | Abgelehnt. Der Lizenzeintrag in der Datei (`name`-Tabelle) lautet „Your use of the San Francisco font is subject to the terms of the applicable iOS Software License Agreement“, `fsType` 4 (nur Vorschau und Druck). Die Quelle war ein Fremdportal („Uploaded by MH1“, dessen Angabe „Free for personal use“ stammt nicht von Apple). Ein Commit würde die Dateien über GitHub und jedes Release weitergeben. Auf iPhone und Mac rendert `-apple-system` ohnehin SF Pro, mit dem passenden Text- oder Display-Schnitt. |
 | Hellmodus | Ausgeschlossen. Die Farbvariablen sind so angelegt, dass ein zweiter Satz unter `prefers-color-scheme: light` später möglich wäre (`dark-mode.md` › Best practices rät von einem eigenen Schalter in der App ab und empfiehlt, der Systemeinstellung zu folgen). |
+
+## 7. Zweite Runde: näher an iOS 26 (Stand 30. Oktober 2026)
+
+| Bereich | Änderung | HIG |
+| --- | --- | --- |
+| Chat-Kopf, Neu-Leiste | Keine eigene Fläche und keine Trennlinie mehr; die Glas-Knöpfe (Zurück, Stumm) liegen auf dem Chat-Hintergrund. Unschärfe entfällt dort, weil hinter der Kopfzeile nichts liegt (spart Rechenzeit). | `toolbars.md` › Best practices: „Reduce the use of toolbar backgrounds and tinted controls.“ |
+| Ränder des Nachrichtenbereichs | Weiche Kante oben (18 px) und unten (14 px) als feste Überlagerung, keine Maske auf dem Scrollbereich. | `layout.md` › Visual hierarchy: „Instead of applying a solid or semi-opaque background color beneath controls, use a scroll edge effect“ |
+| Fußleiste | Schwebende Kapsel (8 px Abstand zum Rand plus Sicherheitsrand) wie die Eingabeleiste in WhatsApp auf iOS. Radius 28 px = Knopfradius 22 px + 6 px Innenabstand. | `toolbars.md` › Best practices: Radien „concentric with bar corners“ |
+| Tab-Leiste | Fast volle Breite (`min(100% - 40px, 400px)`), drei gleich breite Tabs (größere Tippflächen), Zähler am Symbol. Darunter eine weiche Abdunklung, weil die Liste wirklich hinter der Leiste durchläuft. | `tab-bars.md` › Phone (iOS): „A tab bar floats above content at the bottom of the screen“; `scroll-views.md` › Scroll edge effects |
+| Glas-Bedienelemente | Knöpfe, Statuskapsel und runde Leistenknöpfe mit einheitlicher grauer Füllung und heller Kante (`--control-bg`, `--control-ring`, `--glass-shine`). | `liquid-glass.md` › Cross-platform translation (Füllung, Lichtkante) |
+| Einstellungen | Abschnittstitel stehen in kleinen Großbuchstaben über der abgerundeten Gruppe, wie in den iOS-Einstellungen. Ohne `:has()` (Safari vor 15.4) bleibt der Titel in der Gruppe. | `lists-and-tables.md` › Style: „the grouped style uses headers, footers, and additional space to separate groups of data“ |
+| Sheets | Schweben 8 px über dem unteren Rand (plus Sicherheitsrand), alle Ecken 32 px; innere Aktionsgruppe 16 px (konzentrisch). | iOS-26-Erscheinungsbild; Anordnung der Schaltflächen unverändert (Schließen bleibt rechts, `sheets.md` sähe es links vor) |
+
+**GESICHERT:** Browsertests 16/16, 52/52, 18/18 grün, keine Konsolenfehler und keine CSP-Verletzung. Kein Überlauf bei 320 × 568 und 844 × 390. Alle Tippflächen bleiben ≥ 44 px (Probe wie oben). Die Fußleiste bricht bei 320/375/390 px in 4/3/2 Zeilen um, genau wie vorher, und ist 5 px niedriger. Alle Sicherheitsränder sind gleich oder größer: Bei Fußleiste und Sheets wurde aus dem Innenabstand ein Außenabstand derselben Größe, der Inhalt sitzt dadurch weiter vom Rand. Unter „Kontrast erhöhen“ kommt die Trennlinie unter dem Chat-Kopf zurück, die weichen Kanten entfallen.
+
+**VERMUTUNG:** Die weichen Kanten (Farbverlauf zu `#0b0b0c` bzw. Schwarz) sehen in Safari wie in Chromium aus. Ohne Unschärfe wirken sie etwas weicher als Apples eigener Effekt.
+
+**UNBEKANNT:** Wirkung auf dem echten iPhone, insbesondere ob die Kapsel-Fußleiste mit eingeblendeter Tastatur (nur in der Suche) gut aussieht.

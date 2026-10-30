@@ -18,8 +18,18 @@
 
 /* ---------- cards and forms (settings, connection): iOS inset grouped sections ---------- */
 
-.card { margin: 0 0 16px; padding: 14px 16px; border: 1px solid transparent; border-radius: var(--r-lg); background: var(--bg-elev); }
+/* The rounded group is drawn by ::before, so a section title (the card's first h2) can sit above it in small capitals,
+   as iOS section headers do. Without :has() (Safari before 15.4) the title stays inside the group. */
+.card { position: relative; isolation: isolate; margin: 0 0 18px; padding: 14px 16px; border: 1px solid transparent; border-radius: var(--r-lg); }
+.card::before { content: ""; position: absolute; z-index: -1; inset: 0; border-radius: var(--r-lg); background: var(--bg-elev); }
 .card h2 { margin: 0 0 10px; font-size: var(--fs-headline); line-height: 1.294; font-weight: 600; }
+.card:has(> h2:first-child) { padding-top: 6px; }
+.card:has(> h2:first-child)::before { top: 31px; }
+.card > h2:first-child {
+  margin: 0 0 22px; padding: 0; font-size: var(--fs-footnote); line-height: 17px; font-weight: 400;
+  letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .card h3 {
   margin: 18px 0 6px; font-size: var(--fs-footnote); font-weight: 400; letter-spacing: 0.02em;
   text-transform: uppercase; color: var(--text-dim);
@@ -53,7 +63,7 @@
 .usage-row { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; margin: 10px 0; }
 .usage-row .meter { grid-column: 1 / -1; }
 
-.danger-zone { border-color: var(--danger-line); }
+.danger-zone::before { box-shadow: inset 0 0 0 1px var(--danger-line); }
 .confirm-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--danger-line); border-radius: var(--r-md); background: var(--danger-tint); }
 .confirm-panel p { margin: 0 0 10px; font-size: var(--fs-subhead); line-height: 1.33; }
 
@@ -105,26 +115,27 @@ html.modal-open, html.modal-open body { overflow: hidden; }
   padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); background: var(--scrim);
   animation: fade-in var(--dur) ease-out;
 }
-.modal-backdrop.is-sheet { align-items: flex-end; padding-bottom: 0; }
+/* iOS 26 sheet: floats 8 px above the bottom edge (plus safe area) with all corners rounded. */
+.modal-backdrop.is-sheet { align-items: flex-end; padding: calc(16px + env(safe-area-inset-top)) 8px calc(8px + env(safe-area-inset-bottom)); }
 .modal-panel {
   width: min(520px, 100%); max-height: 86dvh; overflow-y: auto; border: 1px solid var(--glass-stroke); border-radius: var(--r-xl);
   background: var(--bg-elev); box-shadow: var(--shadow-pop);
   animation: pop-in var(--dur) var(--ease-spring);
 }
-/* Sheet: slides up from the bottom edge with large top corners (iOS card style). */
+/* Sheet: slides up from the bottom edge, floating with all corners rounded. */
 .modal-panel.sheet {
-  border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; padding-bottom: env(safe-area-inset-bottom);
+  border-radius: 32px;
   animation: sheet-up var(--dur-slow) var(--ease-out);
 }
 @keyframes pop-in { from { opacity: 0; transform: scale(0.94); } }
-@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-up { from { transform: translateY(calc(100% + 16px)); } }
 .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 18px 16px 8px 20px; }
 .modal-titles h2 { margin: 0; font-size: var(--fs-headline); line-height: 1.294; font-weight: 600; }
 .modal-titles p { margin: 2px 0 0; }
 .modal-close { flex: none; font-size: var(--fs-subhead); font-weight: 600; color: var(--text-dim); }
 .modal-body { padding: 4px 16px 18px; }
 /* Actions as one grouped list: rows divided by an inset hairline instead of separate boxes. */
-.sheet-list { display: flex; flex-direction: column; margin-top: 10px; border-radius: var(--r-md); overflow: hidden; background: var(--bg-elev-2); }
+.sheet-list { display: flex; flex-direction: column; margin-top: 10px; border-radius: 16px; overflow: hidden; background: var(--bg-elev-2); } /* 32 - 16 inset: concentric */
 .sheet-item {
   position: relative; display: flex; align-items: center; gap: 14px; width: 100%; min-height: 56px; padding: 10px 16px; text-align: left;
   border: 0; border-radius: 0; background: transparent;
