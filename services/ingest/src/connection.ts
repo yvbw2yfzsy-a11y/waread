@@ -161,6 +161,12 @@ export class ConnectionManager {
     return this.status
   }
 
+  /** Profilbild-Adresse ueber den aktuellen Socket (avatars.ts). Wirft, wenn gerade keine Verbindung steht. */
+  profilePicture(jid: string): Promise<string | null> {
+    if (this.status !== 'connected' || !this.sock) return Promise.reject(new Error('not_connected'))
+    return this.sock.profilePicture(jid)
+  }
+
   start(): void {
     this.stopped = false
     this.pollTimer = this.sched.setInterval(() => this.pollCommand(), this.cfg.commandPollMs)

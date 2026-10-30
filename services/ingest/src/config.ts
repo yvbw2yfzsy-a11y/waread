@@ -79,6 +79,17 @@ export interface IngestConfig {
     /** Beim Start ohne gespeicherte Kopplung automatisch eine QR-Sitzung beginnen. */
     autoPairOnStart: boolean
   }
+  /**
+   * Profilbilder (avatars.ts). Ab Werk aus: Jede Abfrage ist eine Anfrage an WhatsApp (iq "w:profile:picture") plus ein
+   * HTTPS-Abruf des Bildes. Mit `enabled` fragt der Ingest je Chat hoechstens einmal pro `intervalDays` nach, mit
+   * `gapMs` Abstand zwischen zwei Abfragen und hoechstens `maxPerRound` Abfragen am Stueck.
+   */
+  profiles: {
+    enabled: boolean
+    intervalDays: number
+    gapMs: number
+    maxPerRound: number
+  }
   logLevel: 'debug' | 'info' | 'warn' | 'error'
   /** Nur fuer die Testinstanz mit Zweitnummer (F07). */
   diagnostics: {
@@ -126,6 +137,7 @@ export function defaultConfig(): IngestConfig {
       // Prozessstart (Neustart, Reboot, Update). Jede ungewollte Kopplungssitzung ist zusaetzlicher Verkehr.
       autoPairOnStart: false,
     },
+    profiles: { enabled: false, intervalDays: 7, gapMs: 15_000, maxPerRound: 40 },
     logLevel: 'info',
     diagnostics: { countOutgoingNodes: false },
   }
@@ -232,6 +244,12 @@ export function loadConfig(opts: LoadConfigOptions = {}): IngestConfig {
   m.ffmpegTimeoutMs = pickNum(ing, 'ffmpeg_timeout_seconds', m.ffmpegTimeoutMs / 1000, 5, 600) * 1000
   m.storeViewOnce = pickBool(ing, 'store_view_once', m.storeViewOnce)
   m.forceMaxBytes = Math.floor(pickNum(ing, 'max_mb_forced', m.forceMaxBytes / MB, 1, 2048) * MB)
+
+  const pr = cfg.profiles
+  pr.enabled = pickBool(ing, 'profile_pictures', pr.enabled)
+  pr.intervalDays = pickNum(ing, 'profile_pictures_interval_days', pr.intervalDays, 1, 90)
+  pr.gapMs = pickNum(ing, 'profile_pictures_gap_seconds', pr.gapMs / 1000, 3, 600) * 1000
+  pr.maxPerRound = pickNum(ing, 'profile_pictures_max_per_round', pr.maxPerRound, 1, 500)
 
   const c = cfg.connection
   c.backoffStartMs = pickNum(ing, 'backoff_start_seconds', c.backoffStartMs / 1000, 1, 600) * 1000

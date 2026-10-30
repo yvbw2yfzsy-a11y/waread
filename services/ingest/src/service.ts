@@ -3,6 +3,7 @@
  * Getrennt von index.ts, damit der Gesamtweg "Ereignis -> Datenbank -> Medium" testbar ist.
  */
 import type { AuthStore } from './authStore.js'
+import { AvatarSync } from './avatars.js'
 import type { IngestConfig } from './config.js'
 import { IngestCommands } from './commands.js'
 import { ConnectionManager } from './connection.js'
@@ -20,7 +21,7 @@ import type { WaLib } from './waLib.js'
 export interface ServiceDeps {
   cfg: IngestConfig
   log: Logger
-  lib: Pick<WaLib, 'createSocket' | 'downloadMedia'>
+  lib: Pick<WaLib, 'createSocket' | 'downloadMedia'> & Partial<Pick<WaLib, 'downloadProfilePicture'>>
   db: Database
   jobs: JobStore
   auth: AuthStore
@@ -45,6 +46,24 @@ export interface Service {
 export function createService(d: ServiceDeps): Service {
   const { cfg, log, db, jobs, auth } = d
 
+  // Profilbilder: nur mit profile_pictures = true (Abfrage an WhatsApp, siehe avatars.ts). Die Verbindung kommt weiter unten.
+  let conn: ConnectionManager | null = null
+  const downloadPicture = d.lib.downloadProfilePicture
+  const avatars =
+    cfg.profiles.enabled && downloadPicture
+      ? new AvatarSync({
+          db,
+          cfg: cfg.profiles,
+          mediaDir: cfg.paths.mediaDir,
+          log,
+          isConnected: () => conn?.getStatus() === 'connected',
+          query: (jid) => (conn ? conn.profilePicture(jid) : Promise.reject(new Error('not_connected'))),
+          download: (url) => downloadPicture(url),
+          shrink: (src, dest, side) => createThumbnail(src, dest, side),
+          ...(d.scheduler ? { scheduler: d.scheduler } : {}),
+        })
+      : null
+
   // Der Handler kennt die Aufbewahrung, die Warteschlange braucht sie (isExpired) -> Referenz nachtraeglich setzen.
   let handler: MessageHandler | null = null
   const queue = new MediaQueue({
@@ -68,7 +87,7 @@ export function createService(d: ServiceDeps): Service {
   const h = new MessageHandler({ db, jobs, media: queue, cfg, log, ...(d.scheduler ? { scheduler: d.scheduler } : {}) })
   handler = h
 
-  const conn = new ConnectionManager({
+  conn = new ConnectionManager({
     db,
     cfg: cfg.connection,
     lib: d.lib,
@@ -89,7 +108,10 @@ export function createService(d: ServiceDeps): Service {
         h.handleHistory(arg).catch((err) => log.error('history_failed', errorFields(err)))
       },
       'contacts.upsert': (arg) => h.handleContacts(arg),
-      'contacts.update': (arg) => h.handleContacts(arg),
+      'contacts.update': (arg) => {
+        h.handleContacts(arg)
+        avatars?.onContactsUpdate(arg) // "Bild entfernt/geaendert": empfangen, keine Anfrage
+      },
       'chats.upsert': (arg) => h.handleChats(arg),
       'chats.update': (arg) => h.handleChats(arg),
       'groups.upsert': (arg) => h.handleGroups(arg),
@@ -116,8 +138,9 @@ export function createService(d: ServiceDeps): Service {
     ...(d.scheduler ? { scheduler: d.scheduler } : {}),
   })
 
+  const connection = conn
   return {
-    conn,
+    conn: connection,
     queue,
     handler: h,
     start() {
@@ -125,12 +148,14 @@ export function createService(d: ServiceDeps): Service {
       queue.start()
       stateCommands.start() // vor dem Verbindungsaufbau: ein wartender Befehl wirkt, bevor neue Namen eintreffen
       commands.start()
-      conn.start()
+      connection.start()
+      avatars?.start()
     },
     async stop() {
+      avatars?.stop()
       commands.stop()
       stateCommands.stop()
-      await conn.stop()
+      await connection.stop()
       h.flushPending() // F02: wartende Nachrichten ein letztes Mal speichern
       await queue.stop(10_000)
     },
