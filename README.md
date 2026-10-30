@@ -40,6 +40,7 @@ Installation auf dem Pi, Konfiguration, Kopplung und die Prüfungen vor dem Haup
 | `docs/SECURITY_TESTS.md` | Lesebestätigungs-Gate, Zweitnummer-Test, Sicherheits-Baseline |
 | `docs/TEST_CHECKLIST.md` | Was die automatisierten Tests belegen müssen; Sabotage-Proben |
 | `docs/VERSION2.md` | Version 2: was neu ist, Einspielen auf dem Pi, Einmal-Medien, Schild und Aufbewahrung, zusätzlicher Verkehr, Ungeprüftes |
+| `docs/DESIGN.md` | Gestaltung im iOS-Stil: Variablen, Kontrastwerte, Tippflächen, was geprüft ist und was nicht |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
 | `services/*/README.md`, `cleanup/README.md`, `db/README.md` | Verhalten und Grenzen je Baustein |
