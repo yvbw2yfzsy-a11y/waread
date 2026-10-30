@@ -1,0 +1,127 @@
+# waread - Beispielkonfiguration
+#
+# Wird von deploy/install.sh nach /etc/waread/config.toml kopiert, aber nur, wenn diese Datei noch nicht
+# existiert (Rechte 0640, Besitzer root, Gruppe waread). Eine vorhandene Konfiguration wird nie überschrieben.
+#
+# Alle Schlüssel dieser Datei werden vom Code tatsächlich gelesen (Ingest: services/ingest/src/config.ts,
+# Web: services/web/src/config.ts, Updater: deploy/waread-update). Was hier nicht steht, ist fest eingebaut.
+# Jeder Dienst liest nur seine eigenen Tabellen und ignoriert die übrigen.
+#
+# MIT "PLATZHALTER" markierte Zeilen müssen von Hand ersetzt werden. Der Web-Dienst startet mit dem
+# Platzhalter für das Passwort absichtlich nicht.
+
+# ------------------------------------------------------------------------------------------------
+# Pfade (Ingest, Web und Cleanup lesen db und media_dir aus dieser Tabelle)
+# ------------------------------------------------------------------------------------------------
+[paths]
+db = "/var/lib/waread/db/waread.db"        # SQLite-Datei (Ingest, Web)
+auth_dir = "/var/lib/waread/auth"          # WhatsApp-Sitzung des Ingest-Dienstes (Rechte 0700, Dateien 0600)
+media_dir = "/var/lib/waread/media"        # Wurzel der Mediendateien (Ingest schreibt, Web liefert, Cleanup löscht)
+tmp_dir = "/var/lib/waread/tmp"            # von der Zielstruktur vorgesehen; der Ingest nutzt es nicht (Teildateien liegen neben dem Ziel)
+# db_module = "/opt/waread/current/db/dist/client.js"   # nur Web: Standardsuche findet db/dist/client.js im Release
+
+# ------------------------------------------------------------------------------------------------
+# Aufbewahrung
+#
+# Maßgeblich ist die Einstellung in der Oberfläche (Einstellungen -> Aufbewahrung, Standard 3 Tage). Sie liegt in der
+# Datenbank und wird von Ingest, Web und Cleanup gelesen. Die Werte hier gelten NUR für den Ingest und nur, solange in
+# der Datenbank noch nichts gespeichert wurde. Der Cleanup-Dienst kennt sie nicht und fällt auf 3 Tage zurück.
+# Darum nur ändern, wenn es auch 3 Tage bleiben soll oder die Oberfläche ohnehin sofort umgestellt wird.
+# ------------------------------------------------------------------------------------------------
+# [retention]
+# messages_days = 3
+# media_days = 3
+
+# ------------------------------------------------------------------------------------------------
+# Ingest-Dienst (services/ingest)
+# ------------------------------------------------------------------------------------------------
+[ingest]
+log_level = "info"                         # debug | info | warn | error (Nachrichteninhalte werden nie geloggt)
+# Nur fuer die Testinstanz mit Zweitnummer: zaehlt, welche Arten von Knoten die Bibliothek selbst an WhatsApp schickt
+# (nur Art, nie Inhalt; Zeilen "lib_node_out" im Journal). Ab Werk aus, weil dafuer die Bibliothek auf Stufe trace laeuft.
+count_outgoing_nodes = false
+# state_db = "/var/lib/waread/db/ingest-state.db"       # privater Speicher des Ingest (Standard: neben der Hauptdatenbank)
+auto_pair_on_start = false                 # false (empfohlen): QR-Sitzung nur nach Klick auf "Neu verbinden"; true = bei jedem Start ohne Kopplung sofort eine QR-Sitzung
+
+# Medien-Download. Die Regeln max_mb_* und auto_download_* gelten, solange in der Oberfläche keine Download-Regeln
+# gespeichert wurden (Einstellungen -> Download-Regeln); danach haben die gespeicherten Regeln Vorrang.
+max_mb_image = 10
+max_mb_voice = 10
+max_mb_video = 50
+max_mb_document = 20
+auto_download_image = true
+auto_download_voice = true
+auto_download_video = false
+auto_download_document = true
+max_concurrent_downloads = 2               # 1..4
+max_queue_length = 500
+max_retries = 3
+retry_base_seconds = 30
+download_stall_timeout_seconds = 60
+thumbnail_short_side = 200                 # Pixel, Thumbnails für Bilder
+convert_voice = true                       # Sprachnachrichten mit ffmpeg in ein von Safari abspielbares Format wandeln
+ffmpeg_path = "ffmpeg"                     # muss im PATH der Unit liegen (/usr/local/bin:/usr/bin:/bin) oder absolut sein
+ffmpeg_timeout_seconds = 60
+max_mb_forced = 500                        # größtes Medium, das „Medium jetzt laden“ noch holt (1..2048 MB), unabhängig von max_mb_*
+# Einmal-Ansehen-Medien (Foto, Video, Sprachnachricht) wie normale Medien speichern. Ab Werk aus. Ob WhatsApp den Schlüssel
+# für Einmal-Medien an dieses verknüpfte Gerät liefert, ist ungeprüft: Das Journal zeigt es je Nachricht als Zeile
+# "viewonce_probe" (nur Ja/Nein, kein Inhalt). Erst dort nachsehen (journalctl -u waread-ingest -o cat | grep viewonce_probe),
+# dann einschalten. Mit true lädt der Ingest solche Medien bei Ankunft herunter (ein HTTPS-Abruf je Medium, wie bei jedem
+# Auto-Download); der Absender erwartet bei Einmal-Medien, dass nichts bleibt.
+store_view_once = false
+
+# Wiederverbindung nach Verbindungsverlust
+backoff_start_seconds = 5
+backoff_cap_seconds = 600
+stable_after_seconds = 600                 # so lange muss eine Verbindung halten, bevor die Wartezeit zurückgesetzt wird (kürzer = mehr Wiederverbindungen je Stunde)
+
+# ------------------------------------------------------------------------------------------------
+# Web-Dienst (services/web)
+# ------------------------------------------------------------------------------------------------
+[web]
+# ANNAHME: Port 8780 (Festlegung dieses Pakets, kein Vorgabewert). Der Dienst lauscht nur auf 127.0.0.1.
+# Er muss zu deploy/nginx/waread.conf (proxy_pass) und zu update_health_url unten passen.
+port = 8780
+
+# PLATZHALTER: Argon2id-Hash des Anmeldepassworts. Erzeugen auf dem Pi (Eingabe ohne Echo):
+#   cd /opt/waread/current && node services/web/dist/hash-password.js
+# Alles, was nicht mit $argon2id$ beginnt, lehnt der Web-Dienst beim Start ab.
+# Alternativ eine Datei mit dem Hash (Rechte 0640 root:waread) angeben und diese Zeile entfernen:
+#   password_hash_file = "/etc/waread/password.hash"
+password_hash = "PLATZHALTER-ARGON2ID-HASH-HIER-EINTRAGEN"
+
+# Hinter Nginx unter /waread/ MUSS der Cookie-Pfad dazu passen, damit das Cookie nicht an andere Apps auf demselben Host geht.
+cookie_path = "/waread/"
+cookie_secure = "auto"                     # "auto" = Secure, wenn Nginx X-Forwarded-Proto: https meldet; sonst true | false
+session_days = 30
+login_max_attempts = 5                     # je Client-IP und Zeitfenster
+login_window_minutes = 15
+hide_deleted_content = false               # false (Standard): „Für alle gelöscht“ bleibt lesbar und wird mit „Vom Absender gelöscht“ gekennzeichnet. true: nur der Hinweis, Text und Medien werden nicht ausgeliefert. Eine vorhandene config.toml behält ihren alten Wert (frühere Fassungen: true): zum Anzeigen hier auf false stellen.
+log_level = "info"
+max_sse_clients = 16
+# check_origin = false                     # true nur, wenn Nginx Host/X-Forwarded-Host durchreicht, sonst scheitern alle POST/PUT
+# session_secret_file = "/var/lib/waread/session.key"   # Standard; wird beim ersten Start mit 0600 angelegt
+# public_dir = "/opt/waread/current/services/web/public/dist"   # Standard: gebautes Frontend im Release
+
+# --- Passkey-Sperre (optional; ohne diese zwei Zeilen bleibt alles wie bisher, nur Passwort) -------------
+# WebAuthn verlangt einen sicheren Kontext UND einen Host-Namen. Mit http://<Pi-IP>/waread/ geht es NICHT.
+# Nötig ist eine HTTPS-Adresse mit Namen, z. B. https://waread.heimnetz.example/waread/ (siehe docs/INSTALL.md,
+# Abschnitt 17, und deploy/nginx/waread-passkey.example.conf). Beide Werte müssen zusammen gesetzt sein.
+# passkey_rp_id = "waread.heimnetz.example"            # nur der Host-Name, kleingeschrieben, ohne Schema/Port/Pfad
+# passkey_origin = "https://waread.heimnetz.example"   # genau Schema://Host[:Port], ohne Pfad, ohne Schrägstrich am Ende
+# passkey_file = "/var/lib/waread/passkeys.json"       # Standard; Rechte 0600, vom Dienst verwaltet
+# passkey_session_hours = 12                           # Laufzeit der Sitzung NACH Passkey-Anmeldung (1..720); Passwort-Sitzungen: session_days
+
+# ------------------------------------------------------------------------------------------------
+# Automatische Updates (nur deploy/waread-update liest diese Tabelle; die Dienste ignorieren sie)
+#
+# Es gibt KEINE eingebaute Update-Quelle. Ohne update_source_url macht waread-update nichts, und der Timer
+# waread-update.timer ist nach der Installation aus. Mehr dazu: deploy/README.md, Abschnitt "Updates".
+# ------------------------------------------------------------------------------------------------
+[update]
+# PLATZHALTER: Adresse der Manifest-Datei der EIGENEN Update-Quelle (nur https://). Leer = keine Updates.
+update_source_url = ""
+update_pubkey_file = "/etc/waread/update-pubkey.pem"   # öffentlicher Ed25519-Schlüssel zum Prüfen der Manifest-Signatur
+update_require_signature = true            # nicht auf false stellen, außer die Quelle ist anderweitig abgesichert
+update_max_download_mb = 300
+update_health_url = "http://127.0.0.1:8780/healthz"   # nur Loopback; muss zu web.port passen

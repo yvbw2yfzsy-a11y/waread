@@ -1,0 +1,18 @@
+# waread-cleanup.timer
+#
+# Startet waread-cleanup.service stündlich, jeweils um :17 (nicht um :00, wo viele
+# andere Jobs auf dem Pi anlaufen) plus bis zu 2 Minuten Streuung.
+# Persistent=true holt einen verpassten Lauf nach, wenn der Pi aus war.
+
+[Unit]
+Description=waread Aufräumen stündlich
+
+[Timer]
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=120
+AccuracySec=1min
+Persistent=true
+Unit=waread-cleanup.service
+
+[Install]
+WantedBy=timers.target

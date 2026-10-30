@@ -1,0 +1,42 @@
+# waread-update.service
+#
+# Automatisches Update der waread-Programmdateien. Läuft als root, weil es nach
+# /opt/waread schreibt und Dienste neu startet; das Hardening unten begrenzt, was
+# das Skript sonst anfassen kann. Es berührt weder craft-update noch /var/lib/craft
+# noch /var/www/craft. Der zugehörige Timer (waread-update.timer) ist beim
+# Installieren NICHT aktiviert; siehe deploy/README.md, Abschnitt "Updates".
+#
+# Exit-Codes des Skripts: 0 = aktuell oder erfolgreich aktualisiert,
+# 1 = Fehler bzw. Rollback, 2 = Konfiguration/Aufruf, 3 = manuelle Prüfung nötig
+# (Änderung an der WhatsApp-Bibliothek). 1 und 3 lassen die Unit bewusst als "failed"
+# erscheinen, damit es in "systemctl --failed" auffällt.
+
+[Unit]
+Description=waread Update (Programmdateien, nicht die Konfiguration)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/waread/current
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/waread-update
+TimeoutStartSec=45min
+SyslogIdentifier=waread-update
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening. Schreibzugriff nur auf /opt/waread (Releases, current-Symlink, Statusdateien).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/waread
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+# Bewusst NICHT gesetzt: CapabilityBoundingSet, RestrictAddressFamilies. Das Skript
+# ruft systemctl und curl auf; eine zu enge Einschränkung ließe sich hier nicht
+# testen und könnte genau den Neustart/Rollback verhindern, den es absichern soll.

@@ -1,0 +1,27 @@
+{
+  "name": "waread-cleanup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "waread: Aufräum-Dienst (Aufbewahrungsfristen, verwaiste Dateien, WAL-Checkpoint, VACUUM)",
+  "type": "module",
+  "main": "dist/cleanup.js",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cleanup.js",
+    "dry-run": "node dist/cleanup.js --dry-run",
+    "vacuum": "node dist/cleanup.js --vacuum",
+    "test": "node --import tsx --test cleanup.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@waread/db": "*",
+    "better-sqlite3": "^12.0.0",
+    "smol-toml": "^1.6.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

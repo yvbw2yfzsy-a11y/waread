@@ -1,0 +1,57 @@
+# waread-cleanup.service
+#
+# Stündliches Aufräumen: löscht Nachrichten und Medien, die laut WhatsApp-Zeitstempel
+# älter als die eingestellte Aufbewahrungsdauer sind. Wird von waread-cleanup.timer
+# gestartet; ein Neustart bei Fehlern ist nicht nötig, der nächste Timerlauf ist
+# der Wiederholungsversuch (deshalb hier kein Restart=).
+#
+# Einstiegspunkt /opt/waread/current/cleanup/dist/cleanup.js (npm run build) ohne Argument = normales Aufräumen.
+# Datenbank und Medienordner stammen aus [paths] in /etc/waread/config.toml (oder WAREAD_DB / WAREAD_MEDIA_ROOT).
+#
+# Aufräumen und VACUUM (waread-cleanup-vacuum.service) teilen sich dieselbe
+# Sperrdatei und laufen dadurch nie gleichzeitig.
+
+[Unit]
+Description=waread Aufräumen (Aufbewahrungsfrist)
+AssertPathExists=/etc/waread/config.toml
+AssertPathExists=/opt/waread/current/cleanup/dist/cleanup.js
+
+[Service]
+Type=oneshot
+User=waread
+Group=waread
+UMask=0077
+WorkingDirectory=/opt/waread/current
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# flock wartet bis zu 30 Minuten auf einen laufenden VACUUM; Exit-Code 75 = Sperre nicht erhalten.
+ExecStart=/usr/bin/flock --timeout 1800 --conflict-exit-code 75 /var/lib/waread/tmp/cleanup.lock /usr/bin/env node /opt/waread/current/cleanup/dist/cleanup.js
+TimeoutStartSec=40min
+SyslogIdentifier=waread-cleanup
+
+MemoryMax=256M
+Nice=15
+IOSchedulingClass=idle
+
+# Hardening (Sicherheits-Baseline)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waread
+# Die WhatsApp-Sitzung (auth/) gehoert allein dem Ingest-Dienst. Dieser Dienst braucht sie nicht; sollte er
+# uebernommen werden, soll er sie nicht lesen koennen. Bewusst ohne "-": fehlt der Pfad, soll der Start
+# laut scheitern statt still ungeschuetzt zu laufen (install.sh legt auth/ vorher an).
+# Die Wirkung ist NICHT auf einem Pi getestet; Kontrolle: deploy/README.md, Abschnitt "Sitzung abschirmen".
+InaccessiblePaths=/var/lib/waread/auth
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Netz: Das Konzept sieht fuer das Aufraeumen keinen Netzverkehr vor. NICHT auf einem Pi getestet.
+IPAddressDeny=any

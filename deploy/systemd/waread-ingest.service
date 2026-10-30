@@ -1,0 +1,74 @@
+# waread-ingest.service
+#
+# WhatsApp-Ingest (Baileys): empfängt Nachrichten und Medien und schreibt sie
+# ausschließlich lokal (SQLite + Dateien unter /var/lib/waread). Der Dienst
+# sendet nie etwas an WhatsApp zurück; das ist fehlende Funktionalität im Code,
+# keine Einstellung dieser Unit.
+#
+# Release-Vertrag (deploy/README.md, Abschnitt "Release-Vertrag"):
+#   - Einstiegspunkt:  /opt/waread/current/services/ingest/dist/index.js (npm run build)
+#   - Der Dienst liest seine Konfiguration selbst aus /etc/waread/config.toml.
+# Ändert sich ein Dateiname im Projekt, müssen ExecStart= und AssertPathExists= hier und
+# REQUIRED_RELEASE_FILES in install.sh und waread-update angepasst werden.
+
+[Unit]
+Description=waread Ingest (WhatsApp, rein lesend)
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+# time-sync.target: Ein Pi ohne Echtzeituhr startet mit falscher Uhrzeit. Die Reihenfolge allein wartet nur dann
+# auf die echte Synchronisation, wenn systemd-time-wait-sync.service aktiv ist (deploy/README.md, "Uhrzeit").
+# Klarer Fehler statt Absturzschleife, wenn Konfiguration oder Release fehlen.
+AssertPathExists=/etc/waread/config.toml
+AssertPathExists=/opt/waread/current/services/ingest/dist/index.js
+# Nach 5 Fehlstarts in 5 Minuten bleibt die Unit im Zustand "failed",
+# statt dauerhaft zu schleifen.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=waread
+Group=waread
+# Neue Dateien (u. a. die Sitzungsschlüssel in auth/) sind nur für "waread" lesbar.
+UMask=0077
+WorkingDirectory=/opt/waread/current
+Environment=NODE_ENV=production
+# Feste, kurze PATH-Liste; "env node" und ffmpeg werden darüber gefunden.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Temporäres (Konvertierung, Thumbnails) in das dafür vorgesehene Verzeichnis.
+Environment=TMPDIR=/var/lib/waread/tmp
+ExecStart=/usr/bin/env node /opt/waread/current/services/ingest/dist/index.js
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+SyslogIdentifier=waread-ingest
+
+# Ressourcen: ffmpeg und sharp laufen als Kindprozesse/Threads in dieser Unit,
+# ihr Speicher zählt mit. Die Werte sind ungetestete Startwerte (siehe README).
+MemoryHigh=384M
+MemoryMax=512M
+Nice=15
+IOSchedulingClass=idle
+
+# Hardening (Sicherheits-Baseline)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waread
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Bewusst NICHT gesetzt:
+#   MemoryDenyWriteExecute  - bricht den V8-JIT von Node.js.
+#   SystemCallFilter, RestrictAddressFamilies - ohne Test auf dem Zielgerät
+#   könnten sie Baileys, sharp oder ffmpeg unbemerkt stören.
+
+[Install]
+WantedBy=multi-user.target

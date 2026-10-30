@@ -1,0 +1,30 @@
+{
+  "name": "waread-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "waread: WhatsApp-Ingest-Dienst (rein empfangend, sendet nie an WhatsApp zurueck)",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "check:no-send": "node --import tsx --test test/no-send-calls.test.ts",
+    "prebuild": "npm run check:no-send",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
+    "verify": "npm run typecheck && npm test",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@waread/db": "*",
+    "baileys": "7.0.0-rc14",
+    "better-sqlite3": "^12.0.0",
+    "sharp": "^0.35.4",
+    "smol-toml": "^1.6.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

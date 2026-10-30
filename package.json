@@ -1,0 +1,29 @@
+{
+  "name": "waread",
+  "version": "0.1.0",
+  "private": true,
+  "description": "waread: schreibgeschützter WhatsApp-Leser für den Raspberry Pi",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "workspaces": [
+    "db",
+    "services/ingest",
+    "services/web",
+    "services/web/public",
+    "cleanup"
+  ],
+  "scripts": {
+    "build": "npm run build -w @waread/db && npm run build -w waread-ingest && npm run build -w waread-web && npm run build -w waread-frontend && npm run build -w waread-cleanup",
+    "typecheck": "npm run build -w @waread/db && npm run typecheck -w waread-ingest && npm run typecheck -w waread-web && npm run typecheck -w waread-frontend && npm run typecheck -w waread-cleanup",
+    "test": "npm run test -w @waread/db && npm run test -w waread-ingest && npm run test -w waread-web && npm run test -w waread-cleanup && npm run test -w waread-frontend",
+    "check:no-send": "npm run check:no-send -w waread-ingest",
+    "prune:prod": "npm prune --omit=dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3"
+  }
+}
