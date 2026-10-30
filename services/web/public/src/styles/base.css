@@ -1,21 +1,103 @@
-/* Tokens, reset, two-pane layout, glass navigation, chat list, shared controls. */
+/* Tokens, reset, two-pane layout, glass navigation, chat list, shared controls.
+   Look: iOS dark appearance. Values marked "iOS" follow Apple's dark system colors and text styles; the rest are this
+   app's own (WhatsApp-like green, yellow for "new"). Only the floating bars use backdrop-filter. */
 
 :root {
   color-scheme: dark;
-  --bg: #0b0b0c;
-  --bg-elev: #161718;
-  --bg-chat: #0e1011;
-  --text: #e9edef;
-  --text-dim: #8d979c;
-  --line: rgba(255, 255, 255, 0.08);
-  --bubble-in: #242627;
+
+  /* Surfaces (iOS: systemBackground, secondary/tertiary elevated) */
+  --bg: #000000;
+  --bg-chat: #0b0b0c;
+  --bg-elev: #1c1c1e;
+  --bg-elev-2: #2c2c2e;
+  --bar-bg: rgba(22, 22, 24, 0.86);
+  --glass-bg: rgba(30, 30, 33, 0.72);
+  --glass-stroke: rgba(255, 255, 255, 0.12);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --float-bg: rgba(44, 44, 46, 0.95); /* toast, jump button */
+
+  /* Content (iOS: label, secondaryLabel, separator, fills) */
+  --text: #ffffff;
+  --text-dim: rgba(235, 235, 245, 0.6);
+  --text-tab: rgba(235, 235, 245, 0.75);
+  --text-on-bubble: rgba(255, 255, 255, 0.72); /* secondary text inside bubbles: 6.1:1 on --bubble-out */
+  --meta-on-bubble: rgba(255, 255, 255, 0.68);
+  --line: rgba(84, 84, 88, 0.6);
+  --line-strong: rgba(255, 255, 255, 0.3);
+  --fill: rgba(118, 118, 128, 0.24);
+  --fill-strong: rgba(118, 118, 128, 0.36);
+  --fill-pressed: rgba(255, 255, 255, 0.08);
+  --fill-selected: rgba(255, 255, 255, 0.14);
+  --hairline: 1px;
+
+  /* Chat */
+  --bubble-in: #262628;
   --bubble-out: #144a3a;
+  --quote-bg: rgba(0, 0, 0, 0.22);
+  --inset-bg: rgba(0, 0, 0, 0.2); /* tiles inside bubbles: document, missing media */
+
+  /* Signals */
   --yellow: #ffd23f;      /* "new" – deliberately not WhatsApp green */
   --yellow-ink: #1a1400;
   --link: #6cb8ff;
+  --blue: #0a84ff;        /* iOS systemBlue (dark): meters */
+  --orange: #ff9f0a;      /* iOS systemOrange (dark) */
+  --green: #30d158;       /* iOS systemGreen (dark): switch "on" */
+  --accent: #1d6f55;      /* primary button */
+  --accent-tint: #173a2f;
+  --accent-tint-line: #1f5b47;
+  --accent-tint-text: #c4f0de;
   --danger: #ff6b6b;
+  --danger-fill: #7a1f26;
+  --danger-fill-strong: #5c1219;
+  --danger-text: #ff8a8a;
+  --danger-text-strong: #ffb4b4;
+  --danger-line: rgba(255, 107, 107, 0.4);
+  --danger-tint: rgba(255, 107, 107, 0.06);
+  --danger-tint-strong: rgba(255, 107, 107, 0.12);
+  --notice-line: rgba(74, 160, 216, 0.45);
+  --notice-tint: rgba(74, 160, 216, 0.07);
+  --warn: #ffb020;
+  --warn-text: #ffcf70;
+  --warn-bg: rgba(255, 176, 32, 0.14);
+  --st-ok: #3ecf8e;
+
+  /* Type (iOS text styles at the default size) */
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fs-large: 34px;     /* Large Title, bold */
+  --fs-title1: 28px;
+  --fs-title3: 20px;
+  --fs-headline: 17px;  /* semibold */
+  --fs-body: 17px;
+  --fs-callout: 16px;
+  --fs-subhead: 15px;
+  --fs-footnote: 13px;
+  --fs-caption1: 12px;
+  --fs-caption2: 11px;  /* smallest size used */
+  --lh-body: 1.294;     /* 22/17 */
+  --lh-tight: 1.2;
+
+  /* Shape and depth */
+  --r-xs: 6px;          /* where grouped bubbles touch */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;         /* bubbles, cards */
+  --r-xl: 24px;         /* sheets */
+  --r-pill: 999px;
+  --shadow-float: 0 6px 24px rgba(0, 0, 0, 0.38);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  /* Motion: short, slightly springy; transform and opacity only */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --dur-fast: 150ms;
+  --dur: 220ms;
+  --dur-slow: 300ms;
 }
+
+/* One device pixel on Retina screens, like iOS separators. */
+@media (min-resolution: 2dppx) { :root { --hairline: 0.5px; } }
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -24,9 +106,10 @@ html, body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.35 var(--font);
+  font: var(--fs-body)/var(--lh-body) var(--font);
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
@@ -37,11 +120,12 @@ button, input, select { font: inherit; color: inherit; }
 button, a, .chip { touch-action: manipulation; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+::placeholder { color: var(--text-dim); opacity: 1; }
 mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px; padding: 0 1px; }
 
 .icon { display: inline-flex; vertical-align: middle; flex: none; }
 .muted { color: var(--text-dim); }
-.small { font-size: 13px; }
+.small { font-size: var(--fs-footnote); line-height: 1.38; }
 .center { text-align: center; }
 
 /* ---------- layout: one pane on phones, two panes on wide screens ---------- */
@@ -59,9 +143,17 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
      chat list) and the navigation and the footer end up below the visible area while the whole page scrolls. */
   .shell { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .shell.chat-open .pane-left { display: flex; }
-  .pane-right { display: flex; border-left: 1px solid var(--line); }
+  .pane-right { display: flex; border-left: var(--hairline) solid var(--line); }
   .chat-head .back { display: none; }
 }
+
+/* Phone: the chat slides in from the trailing edge, the list fades back in (a short push, like a navigation stack). */
+@media (max-width: 899px) {
+  .shell.chat-open .chat-pane { animation: push-in var(--dur-slow) var(--ease-out); }
+  .shell:not(.chat-open) .pane-left { animation: fade-in var(--dur) ease-out; }
+}
+@keyframes push-in { from { transform: translateX(28%); opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } }
 
 .placeholder {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -71,7 +163,7 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .left-host .scroll { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
-.pad { padding: 4px 14px; }
+.pad { padding: 4px 16px; }
 
 /* ---------- headers ---------- */
 
@@ -79,34 +171,37 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: calc(12px + env(safe-area-inset-top)) 16px 8px;
 }
-.pane-head h1 { margin: 0; font-size: 34px; font-weight: 800; letter-spacing: -0.02em; }
+.pane-head h1 { margin: 0; font-size: var(--fs-large); line-height: 1.2; font-weight: 700; }
 .pane-head.with-back { justify-content: flex-start; }
-.pane-head.with-back h1 { font-size: 24px; }
+.pane-head.with-back h1 { font-size: var(--fs-title1); }
 
+/* Round glass-style buttons in bars (back, mute, close). */
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 2px;
   min-width: 44px; height: 44px; padding: 0 10px;
-  border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.08);
+  border: 0; border-radius: var(--r-pill); background: var(--fill);
+  box-shadow: var(--glass-shine), inset 0 0 0 var(--hairline) var(--glass-stroke);
 }
-.back-count { font-weight: 700; font-size: 16px; }
+.back-count { font-weight: 600; font-size: var(--fs-callout); }
 
 /* ---------- connection status chip and offline banner ---------- */
 
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--st, #888); }
 .dot.big { width: 14px; height: 14px; }
-.st-connected { --st: #3ecf8e; }
-.st-connecting { --st: #ffb020; }
-.st-disconnected, .st-needs_qr { --st: #ff6b6b; }
+.st-connected { --st: var(--st-ok); }
+.st-connecting { --st: var(--warn); }
+.st-disconnected, .st-needs_qr { --st: var(--danger); }
 
 .status-chip {
-  display: inline-flex; align-items: center; gap: 8px; padding: 10px 12px; min-height: 40px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--bg-elev);
-  font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 44px;
+  border: 0; border-radius: var(--r-pill); background: var(--fill);
+  box-shadow: var(--glass-shine), inset 0 0 0 var(--hairline) var(--glass-stroke);
+  font-size: var(--fs-footnote); font-weight: 600;
 }
 
 .banner {
-  display: flex; align-items: center; gap: 8px; margin: 0 16px 8px; padding: 8px 12px;
-  border-radius: 12px; background: rgba(255, 176, 32, 0.14); color: #ffcf70; font-size: 13px;
+  display: flex; align-items: center; gap: 8px; margin: 0 16px 8px; padding: 10px 12px;
+  border-radius: var(--r-md); background: var(--warn-bg); color: var(--warn-text); font-size: var(--fs-footnote); line-height: 1.38;
 }
 
 /* ---------- filter chips ---------- */
@@ -117,97 +212,106 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
-  flex: none; padding: 11px 14px; min-height: 44px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--bg-elev); font-size: 15px; font-weight: 600;
+  flex: none; padding: 11px 15px; min-height: 44px; border: 1px solid var(--line); border-radius: var(--r-pill);
+  background: var(--bg-elev); font-size: var(--fs-subhead); line-height: var(--lh-tight); font-weight: 600;
 }
-.chip.on { background: #173a2f; border-color: #1f5b47; color: #c4f0de; }
-.chip-count { margin-left: 6px; color: var(--yellow); font-weight: 800; }
+.chip.on { background: var(--accent-tint); border-color: var(--accent-tint-line); color: var(--accent-tint-text); }
+.chip-count { margin-left: 6px; color: var(--yellow); font-weight: 700; }
 
-/* ---------- chat list ---------- */
+/* ---------- chat list (iOS plain list: separators inset to the text) ---------- */
 
 .chat-list { list-style: none; margin: 0; padding: 0; }
 .chat-item {
   display: flex; align-items: center; gap: 12px; padding: 8px 16px;
   color: inherit; text-decoration: none;
 }
-.chat-item:active, .chat-item.active { background: rgba(255, 255, 255, 0.06); }
-.chat-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 4px 0 10px; border-bottom: 1px solid var(--line); }
+.chat-item:active { background: var(--fill-pressed); }
+.chat-item.active { background: var(--fill-selected); }
+.chat-body {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 4px 0 10px;
+  border-bottom: var(--hairline) solid var(--line);
+}
 .chat-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.chat-name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-time { flex: none; font-size: 13px; color: var(--text-dim); }
+.chat-name { font-size: var(--fs-headline); line-height: 1.294; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-time { flex: none; font-size: var(--fs-subhead); line-height: 1.33; color: var(--text-dim); }
 .chat-item.has-new .chat-time { color: var(--yellow); }
 .chat-preview {
-  min-width: 0; font-size: 15px; color: var(--text-dim);
+  min-width: 0; font-size: var(--fs-subhead); line-height: 1.33; color: var(--text-dim);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .chat-preview .icon { margin-right: 4px; vertical-align: -3px; }
-.chat-item.has-new .chat-name { color: #fff; }
+.chat-item.has-new .chat-name { color: var(--text); }
 .dot-new { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--yellow); }
 
 /* "New" counter: yellow on purpose, never green. */
 .badge-new {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px;
-  background: var(--yellow); color: var(--yellow-ink); font-size: 13px; font-weight: 800;
+  background: var(--yellow); color: var(--yellow-ink); font-size: var(--fs-footnote); font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- avatars ---------- */
 
 .avatar {
   display: flex; align-items: center; justify-content: center; flex: none;
-  border-radius: 50%; overflow: hidden; color: #fff; font-weight: 700; user-select: none;
+  border-radius: 50%; overflow: hidden; color: #fff; font-weight: 600; user-select: none;
 }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
-.avatar-sm { width: 40px; height: 40px; font-size: 15px; }
+.avatar-sm { width: 40px; height: 40px; font-size: var(--fs-subhead); }
 .avatar-md { width: 54px; height: 54px; font-size: 19px; }
-.avatar-lg { width: 80px; height: 80px; font-size: 28px; }
+.avatar-lg { width: 80px; height: 80px; font-size: var(--fs-title1); }
 
-/* ---------- floating glass navigation ---------- */
+/* ---------- floating glass navigation (iOS tab bar) ---------- */
 
 .glass-nav {
   position: absolute; z-index: 20; left: 50%; transform: translateX(-50%);
   bottom: calc(12px + env(safe-area-inset-bottom));
-  display: flex; gap: 4px; padding: 6px; border-radius: 999px;
-  background: rgba(44, 46, 48, 0.55);
-  -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  display: flex; gap: 4px; padding: 6px; border-radius: var(--r-pill);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-stroke);
+  box-shadow: var(--shadow-float), var(--glass-shine);
 }
 .tab {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 78px; padding: 7px 14px; border-radius: 999px;
-  color: var(--text-dim); text-decoration: none; font-size: 11px; font-weight: 600;
+  min-width: 78px; padding: 7px 14px; border-radius: var(--r-pill);
+  color: var(--text-tab); text-decoration: none; font-size: var(--fs-caption2); line-height: 1.18; font-weight: 600;
 }
-.tab.on { background: rgba(255, 255, 255, 0.14); color: var(--text); }
-.tab-badge { position: absolute; top: 2px; right: 10px; min-width: 18px; height: 18px; font-size: 11px; }
+.tab.on { background: var(--fill-selected); color: var(--text); box-shadow: var(--glass-shine); }
+/* Filled symbol for the selected tab, as iOS does. */
+.tab.on .icon-chats path, .tab.on .icon-settings path { fill: currentColor; fill-rule: evenodd; }
+.tab.on .icon-search svg { stroke-width: 2.4; }
+.tab-badge { position: absolute; top: 2px; right: 10px; min-width: 18px; height: 18px; font-size: var(--fs-caption2); }
 
 /* ---------- shared controls ---------- */
 
 .actions.vertical { flex-direction: column; align-items: stretch; }
-.btn.small-btn { padding: 8px 12px; min-height: 40px; font-size: 14px; }
-.btn.extreme { border-width: 2px; border-color: #ff8a8a; background: #5c1219; }
-.icon-btn.mute[aria-pressed="true"] { background: rgba(255, 255, 255, 0.2); }
+.btn.small-btn { position: relative; padding: 8px 12px; min-height: 40px; font-size: 14px; }
+.btn.extreme { border-width: 2px; border-color: var(--danger-text); background: var(--danger-fill-strong); }
+.icon-btn.mute[aria-pressed="true"] { background: var(--fill-selected); }
 .chat-item.is-muted .chat-name, .chat-item.is-muted .chat-preview { color: var(--text-dim); }
 .chat-muted { display: inline-flex; margin-right: 5px; vertical-align: -2px; color: var(--text-dim); }
 
+/* Capsule buttons without a stroke (iOS "gray" style); the border stays transparent so sizes do not change. */
 .btn {
-  display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08); font-size: 15px; font-weight: 600; text-decoration: none;
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 9px 16px;
+  border: 1px solid transparent; border-radius: var(--r-pill);
+  background: var(--fill); font-size: var(--fs-subhead); line-height: var(--lh-tight); font-weight: 600; text-decoration: none;
 }
-.btn.primary { background: #1d6f55; border-color: #27896b; }
-.btn.danger { background: #7a1f26; border-color: #a72b34; }
+.btn.primary { background: var(--accent); }
+.btn.danger { background: var(--danger-fill); }
 .btn:disabled, .glass-btn:disabled { opacity: 0.45; cursor: default; }
 
 .glass-btn {
   display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08); font-size: 12.5px; font-weight: 600;
+  border: 1px solid var(--glass-stroke); border-radius: var(--r-pill);
+  background: var(--fill); font-size: var(--fs-caption1); font-weight: 600;
 }
 
 .field {
-  width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px;
-  background: var(--bg-elev); font-size: 16px; /* 16px keeps iOS from zooming on focus */
+  width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: var(--r-sm);
+  background: var(--fill); font-size: 16px; /* 16px keeps iOS from zooming on focus */
 }
 
 .empty {
@@ -226,7 +330,44 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 .boot { height: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); }
 .noscript { padding: 24px; }
 
+/* ---------- touch feedback ---------- */
+
+/* Pressed controls shrink a little (transform only, no layout). */
+.btn, .icon-btn, .chip, .status-chip, .tab, .glass-btn, .play, .speed, .doc-dl, .to-bottom, .lb-btn, .sheet-item {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active, .glass-btn:not(:disabled):active,
+.play:active, .speed:active, .doc-dl:active, .to-bottom:active, .lb-btn:active { transform: scale(0.95); }
+
+/* Small controls keep their look but get a 44 px tall hit area. */
+.btn.small-btn::after { content: ""; position: absolute; inset: -3px 0; } /* -3px: 1 px border + 2 px */
+
+/* ---------- system settings ---------- */
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   .spinner { animation: none; }
+  .btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active, .glass-btn:not(:disabled):active,
+  .play:active, .speed:active, .doc-dl:active, .to-bottom:active, .lb-btn:active { transform: none; opacity: 0.7; }
+}
+
+/* Increase Contrast: opaque separators, brighter secondary text, visible outlines on filled controls. */
+@media (prefers-contrast: more) {
+  :root {
+    --line: #7c7c80;
+    --text-dim: rgba(235, 235, 245, 0.8);
+    --text-tab: #ffffff;
+    --text-on-bubble: rgba(255, 255, 255, 0.88);
+    --meta-on-bubble: rgba(255, 255, 255, 0.85);
+    --glass-bg: rgba(30, 30, 33, 0.96);
+    --bar-bg: #161618;
+    --glass-stroke: rgba(255, 255, 255, 0.45);
+    --fill: rgba(118, 118, 128, 0.42);
+  }
+  .btn, .chip, .field { border-color: rgba(255, 255, 255, 0.5); }
+}
+
+/* Reduce Transparency (Chromium only; Safari does not report it): solid bars. */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass-bg: #1e1e21; --bar-bg: #161618; }
 }

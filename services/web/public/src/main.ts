@@ -147,5 +147,9 @@ async function boot(): Promise<void> {
   startApp();
 }
 
+// Safari on iOS is documented to apply :active (the pressed look of buttons and rows) only when the page has a touch
+// listener; not verified on a device here. This one does nothing and is passive, so scrolling is unaffected.
+document.addEventListener('touchstart', () => undefined, { passive: true });
+
 setUnauthorizedHandler(showLoginScreen);
 void boot();
