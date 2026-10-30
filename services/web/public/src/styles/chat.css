@@ -196,24 +196,43 @@
 
 /* ---------- voice player ---------- */
 
-.bubble.has-voice { min-width: min(270px, 80vw); }
-.voice { display: flex; align-items: center; gap: 8px; }
-.voice-lead { position: relative; display: flex; color: var(--text-on-bubble); }
+/* Styled after WhatsApp on iOS: a bare play symbol, thin rounded bars (played white, rest grey) with a round thumb at
+   the position, the duration under the bars and a dark speed capsule. Play, bars and speed share one centre line. */
+.bubble.has-voice { min-width: min(300px, 76vw); }
+.voice { display: flex; align-items: flex-start; gap: 8px; }
+.voice-lead { position: relative; display: flex; margin-top: 11px; color: var(--text-on-bubble); }
 .voice-dot { position: absolute; top: -3px; right: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--yellow); }
 .play {
   position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
-  padding: 0; border: 0; border-radius: 50%; background: var(--fill-selected);
+  padding: 0; border: 0; border-radius: 50%; background: transparent; color: #fff;
 }
-.voice-main { flex: 1; min-width: 0; }
-.wave { display: flex; align-items: center; gap: 2px; height: 30px; cursor: pointer; touch-action: pan-y; }
-.voice-main { min-width: 0; }
-.wave i { flex: 1; min-width: 2px; max-width: 4px; align-self: center; border-radius: 2px; background: rgba(255, 255, 255, 0.32); }
+/* Opacity on the whole symbol (not an rgba colour), so fill and rounded stroke do not overlap into a darker rim. */
+.play svg { width: 30px; height: 30px; opacity: 0.72; }
+/* Slightly rounded corners on the play triangle and the pause bars. */
+.play svg path, .play svg rect { stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.voice-main { flex: 1; min-width: 0; padding-top: 5px; }
+/* space-between: the bars always span the whole slider, so a tap lands where the bar is drawn. */
+.wave { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 2px; height: 30px; cursor: pointer; touch-action: pan-y; }
+.wave i {
+  position: relative; flex: 0 1 3px; min-width: 2px; min-height: 3px; align-self: center;
+  border-radius: var(--r-pill); background: rgba(255, 255, 255, 0.3);
+}
 .wave i.on { background: var(--text); }
-.voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 2px; font-size: var(--fs-caption1); color: var(--text-on-bubble); font-variant-numeric: tabular-nums; }
+/* Thumb: before the first unplayed bar, at the start before playing, at the end when all bars are played. */
+.wave i.on + i:not(.on)::before, .wave i:first-child:not(.on)::before, .wave i.on:last-child::after {
+  content: ""; position: absolute; z-index: 1; top: 50%; width: 13px; height: 13px; margin-top: -6.5px;
+  border-radius: 50%; background: var(--thumb, var(--link)); pointer-events: none;
+}
+.wave i.on + i:not(.on)::before { left: -7.5px; }
+.wave i:first-child:not(.on)::before { left: -6.5px; }
+.wave i.on:last-child::after { right: -6.5px; }
+/* Not yet listened to (incoming): yellow thumb, matching the yellow dot at the microphone. */
+.voice:has(.voice-dot:not([hidden])) { --thumb: var(--yellow); }
+.voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; font-size: var(--fs-subhead); line-height: 1.2; color: var(--meta-on-bubble); font-variant-numeric: tabular-nums; }
 /* Right of the waveform, a real tap target (44 x 40 px, hit area 44 x 44). */
 .speed {
-  position: relative; flex: none; min-width: 44px; height: 40px; padding: 0 6px; border: 0; border-radius: var(--r-pill);
-  background: var(--fill-selected); font-size: var(--fs-footnote); font-weight: 600; font-variant-numeric: tabular-nums;
+  position: relative; flex: none; min-width: 52px; height: 40px; padding: 0 12px; border: 0; border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: var(--fs-subhead); font-weight: 600; font-variant-numeric: tabular-nums;
 }
 /* 40 px circles keep the bubble compact; the hit area is 44 x 44. */
 .play::after, .doc-dl::after, .speed::after { content: ""; position: absolute; inset: -2px; }
