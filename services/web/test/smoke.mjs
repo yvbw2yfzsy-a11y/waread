@@ -289,6 +289,22 @@ r = await call('GET', `/api/chats/${encodeURIComponent(A)}/avatar`, { cookie });
 ok('avatar 200 image/jpeg', r.status === 200 && r.headers['content-type'] === 'image/jpeg' && r.body.length === 300, [r.status, r.headers['content-type']]);
 r = await call('GET', `/api/chats/${encodeURIComponent(G)}/avatar`, { cookie });
 ok('avatar ohne Bild -> 404', r.status === 404);
+ok('avatarUrl mit Version (Dateiname) nur bei Bild', ca?.avatarUrl === `api/chats/${encodeURIComponent(A)}/avatar?v=anna.jpg` && chats.find((c) => c.id === G).avatarUrl === undefined, ca?.avatarUrl);
+
+// -- Profilbild beim Oeffnen: nur ein Befehl an den Ingest, nur wenn eingeschaltet, keiner doppelt
+const avatarCmds = () => db.prepare("SELECT payload_json AS p FROM ingest_commands WHERE type = 'refresh_avatar'").all().map((x) => JSON.parse(x.p).chatId);
+r = await call('POST', `/api/chats/${encodeURIComponent(A)}/avatar/refresh`, { cookie });
+ok('avatar/refresh ausgeschaltet: 200, kein Befehl', r.status === 200 && r.json?.queued === false && avatarCmds().length === 0, [r.status, r.json]);
+client.setSetting(db, 'avatars.enabled', '1');
+r = await call('POST', `/api/chats/${encodeURIComponent(A)}/avatar/refresh`, { cookie });
+const r2 = await call('POST', `/api/chats/${encodeURIComponent(A)}/avatar/refresh`, { cookie });
+ok('avatar/refresh eingeschaltet: 202, genau ein Befehl', r.status === 202 && r2.status === 202 && avatarCmds().join() === A, [r.status, r2.status, avatarCmds()]);
+r = await call('POST', `/api/chats/${encodeURIComponent('weg@s.whatsapp.net')}/avatar/refresh`, { cookie });
+ok('avatar/refresh unbekannter Chat -> 404', r.status === 404);
+r = await call('POST', `/api/chats/${encodeURIComponent(A)}/avatar/refresh`);
+ok('avatar/refresh ohne Sitzung -> 401', r.status === 401);
+db.prepare("DELETE FROM ingest_commands WHERE type = 'refresh_avatar'").run();
+client.setSetting(db, 'avatars.enabled', '0');
 
 // -- Nachrichten
 const mp = (chat, q = '') => `/api/chats/${encodeURIComponent(chat)}/messages${q}`;
@@ -543,6 +559,8 @@ r = await call('POST', '/api/connect', {});
 ok('POST /api/connect ohne Anmeldung -> 401', r.status === 401, r.status);
 pushEvent(db, 'history_synced', { stored: 42, secret: 'x' });
 ok('SSE history_synced (nur stored)', await waitFor(() => /event: history_synced\ndata: \{"stored":42\}/.test(s1.data)), s1.data);
+pushEvent(db, 'avatar_updated', { chatId: A, path: '/geheim' });
+ok('SSE avatar_updated (nur chatId)', await waitFor(() => new RegExp(`event: avatar_updated\ndata: \\{"chatId":"${A.replace(/[.]/g, '\\.')}"\\}`).test(s1.data)), s1.data);
 s1.req.destroy(); s2.req.destroy();
 await sleep(100);
 ok('Hub raeumt getrennte Clients auf', running.app.hub.size === 0, running.app.hub.size);

@@ -2,8 +2,9 @@
  * EINZIGE Stelle, die die WhatsApp-Bibliothek (Baileys) laedt und benutzt.
  *
  * Die Huelle ("enge Huelle um die Bibliothek", Konzept):
- *   - Nach aussen gibt es nur `WaSocket` mit genau zwei Faehigkeiten: Ereignisse abonnieren
- *     (`ev.on` / `ev.off`) und die Verbindung beenden (`end`).
+ *   - Nach aussen gibt es nur `WaSocket` mit drei Faehigkeiten: Ereignisse abonnieren (`ev.on` / `ev.off`), die
+ *     Verbindung beenden (`end`) und die Profilbild-Adresse eines Chats erfragen (`profilePicture`). Letzteres ist die
+ *     einzige Anfrage an WhatsApp, die die Huelle durchreicht; avatars.ts nutzt sie nur mit `profile_pictures = true`.
  *   - Das rohe Baileys-Socket-Objekt verlaesst dieses Modul nie. Methoden zum Senden,
  *     Lesebestaetigen, Presence usw. sind fuer den Rest des Codes deshalb nicht erreichbar.
  *   - Medien werden ueber `downloadMedia` geladen (HTTP-Abruf des verschluesselten Blobs +
@@ -29,6 +30,12 @@ export interface WaSocket {
   readonly ev: WaEvents
   /** Verbindung lokal beenden (KEIN Abmelden am Konto). */
   end(error?: Error): void | Promise<void>
+  /**
+   * Adresse des Profilbilds (gross, "image") eines Kontakts oder einer Gruppe. Sendet eine Abfrage an WhatsApp
+   * (iq type=get, xmlns w:profile:picture), wie WhatsApp Web sie fuer Profilbilder stellt. null: kein Bild oder fuer
+   * dieses Konto nicht sichtbar (Fehlercode 401 oder 404; die beiden Faelle lassen sich nicht weiter unterscheiden).
+   */
+  profilePicture(jid: string): Promise<string | null>
 }
 
 export interface SignalKeyStoreLike {
@@ -110,7 +117,13 @@ export interface AuthLib {
 export interface WaLib extends AuthLib {
   createSocket(opts: { auth: AuthStateLike }): WaSocket
   downloadMedia(target: DownloadTarget): Promise<Readable>
+  /** Laedt ein Profilbild von der Adresse aus `profilePicture` (HTTPS, nur *.whatsapp.net, ohne Weiterleitung). */
+  downloadProfilePicture(url: string): Promise<Buffer>
 }
+
+/** Obergrenze je Profilbild-Datei (Schutz vor Missbrauch). Wie gross WhatsApps Bilder tatsaechlich sind, ist hier nicht gemessen. */
+export const PROFILE_PICTURE_MAX_BYTES = 2 * 1024 * 1024
+const PROFILE_PICTURE_TIMEOUT_MS = 20_000
 
 /** pino-kompatible Minimalschnittstelle, wie Baileys sie erwartet (ILogger, src/Utils/logger.ts). */
 export interface LibLogger {
@@ -233,8 +246,30 @@ export async function loadWaLib(log: Logger, importer: ModuleImporter = defaultI
           off: (event, handler) => raw.ev.off(event, handler),
         },
         end: (error) => raw.end(error),
+        profilePicture: async (jid) => {
+          try {
+            const url = await raw.profilePictureUrl(jid, 'image', PROFILE_PICTURE_TIMEOUT_MS)
+            return typeof url === 'string' && url !== '' ? url : null
+          } catch (err) {
+            // Boom aus assertNodeErrorFree: data = Fehlercode der Antwort (401 nicht sichtbar, 404 kein Bild).
+            const code = (err as { data?: unknown } | null)?.data
+            if (code === 401 || code === 404) return null
+            throw err
+          }
+        },
       }
       return shell
+    },
+
+    async downloadProfilePicture(url) {
+      checkMediaUrl(url)
+      const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(PROFILE_PICTURE_TIMEOUT_MS) })
+      if (!res.ok) throw new Error(`profile_picture_http_${res.status}`)
+      const declared = Number(res.headers.get('content-length') ?? '0')
+      if (declared > PROFILE_PICTURE_MAX_BYTES) throw new Error('profile_picture_too_large')
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (buf.length > PROFILE_PICTURE_MAX_BYTES) throw new Error('profile_picture_too_large')
+      return buf
     },
 
     async downloadMedia(target) {

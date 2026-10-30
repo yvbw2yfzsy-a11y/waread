@@ -182,6 +182,8 @@ export interface SseHandlers {
   onCleanupDone(u: { deletedMessages: number; deletedMedia: number }): void;
   /** History batch arrived after pairing: it creates no per-message events, so reload the chat list. */
   onHistorySynced(u: { stored: number }): void;
+  /** Profilbild eines Chats geaendert (nur mit eingeschaltetem Profilbild-Abruf im Ingest). */
+  onAvatarUpdated(u: { chatId: string }): void;
   onOpen(isReconnect: boolean): void;
   onDown(): void;
 }

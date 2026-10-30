@@ -110,6 +110,8 @@ function startApp(): void {
       if (u.deletedMessages > 0 || u.deletedMedia > 0) { dataChanged(); void loadChats(); }
     },
     onHistorySynced: () => refreshChatsSoon(),
+    // New picture: the chat list carries a new avatarUrl (versioned), so reloading it is enough.
+    onAvatarUpdated: () => refreshChatsSoon(),
     onOpen: () => { setOnline(true); void refreshAll(); },
     onDown: () => {
       setOnline(false);
@@ -146,6 +148,10 @@ async function boot(): Promise<void> {
   if (status.status === 'rejected' && chats.status === 'rejected') { showBootError(); return; }
   startApp();
 }
+
+// Safari on iOS is documented to apply :active (the pressed look of buttons and rows) only when the page has a touch
+// listener; not verified on a device here. This one does nothing and is passive, so scrolling is unaffected.
+document.addEventListener('touchstart', () => undefined, { passive: true });
 
 setUnauthorizedHandler(showLoginScreen);
 void boot();

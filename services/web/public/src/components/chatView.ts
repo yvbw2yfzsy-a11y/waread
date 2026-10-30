@@ -2,6 +2,7 @@
 // something is unseen, so it never covers messages), message list with date separators, yellow "N neue Nachrichten"
 // divider, seen tracking, paging of older messages, jump-to-message with highlight, and the read-only footer bar.
 
+import { api } from '../api';
 import { goBack } from '../router';
 import {
   isNew, loadInitial, loadOlder, markAllSeen, markSeenUpTo, on, setMuted, state, unreadElsewhere,
@@ -350,6 +351,8 @@ export function mountChatView(host: HTMLElement, chatId: string, jumpMsgId?: str
   renderOffline();
   olderObserver.observe(sentinel);
   void init();
+  // Like WhatsApp: opening a chat refreshes its profile picture if it is due (decided by the ingest service).
+  api.refreshAvatar(chatId).catch(() => undefined);
 
   return () => {
     destroyed = true;

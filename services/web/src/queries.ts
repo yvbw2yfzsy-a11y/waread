@@ -215,6 +215,8 @@ export interface ChatApi {
   name: string;
   isGroup: boolean;
   hasAvatar: boolean;
+  /** Mit Versionsparameter (aendert sich mit jedem neuen Bild), damit der Browser kein altes Bild aus dem Cache zeigt. */
+  avatarUrl?: string;
   lastActivityAt: number | null;
   lastMessagePreview: string | null;
   lastMessageType: MessageType;
@@ -289,6 +291,9 @@ export function listChats(db: Db, hideDeleted: boolean): ChatApi[] {
       name: r.name && r.name !== '' ? r.name : r.id.split('@')[0] || r.id,
       isGroup: r.is_group === 1,
       hasAvatar: typeof r.avatar_path === 'string' && r.avatar_path !== '',
+      ...(typeof r.avatar_path === 'string' && r.avatar_path !== ''
+        ? { avatarUrl: `api/chats/${encodeURIComponent(r.id)}/avatar?v=${encodeURIComponent(r.avatar_path.split('/').pop() ?? '')}` }
+        : {}),
       lastActivityAt: num(r.last_activity_at),
       lastMessagePreview: preview,
       lastMessageType: r.lm_type,
@@ -390,6 +395,18 @@ export function getLoadState(db: Db, id: string): { exists: boolean; loadable: b
     id,
   );
   return r ? { exists: true, loadable: r.loadable === 1, protectedAt: num(r.protected_at) } : { exists: false, loadable: false, protectedAt: null };
+}
+
+/** Wartet fuer diesen Chat schon ein Befehl "refresh_avatar"? (Mehrfaches Oeffnen legt keinen zweiten an.) */
+export function hasPendingAvatarRefresh(db: Db, chatId: string): boolean {
+  const rows = allRows<{ p: string }>(db, "SELECT payload_json AS p FROM ingest_commands WHERE type = 'refresh_avatar'");
+  return rows.some((r) => {
+    try {
+      return (JSON.parse(r.p) as { chatId?: unknown } | null)?.chatId === chatId;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Wartet fuer diese Nachricht schon ein Befehl "load_media"? (Doppeltes Antippen legt keinen zweiten an.) */

@@ -270,6 +270,11 @@ export class EventPump {
         // Erweiterung ueber den Vertrag hinaus: einmal je Verlaufspaket nach dem Koppeln. Die Oberflaeche
         // laedt daraufhin die Chatliste neu (der Verlauf erzeugt keine einzelnen new_message-Ereignisse).
         return { name: 'history_synced', data: { stored: count(p?.['stored']) } };
+      case 'avatar_updated': {
+        // Ergaenzung (Profilbilder): Profilbild eines Chats geaendert (Ingest, avatars.ts). Die Oberflaeche laedt die Chatliste neu.
+        const chatId = pickId(p?.['chatId']);
+        return chatId ? { name: 'avatar_updated', data: { chatId } } : null;
+      }
       case 'cleanup_done':
         return {
           name: 'cleanup_done',

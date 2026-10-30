@@ -175,6 +175,10 @@ export class FakeSocket implements WaSocket {
     this.ended = true
     this.endError = error
   }
+  /** Nur damit die Klasse WaSocket erfuellt; ueber FakeLib zaehlt jeder Aufruf als unerwartet (unexpectedCalls). */
+  profilePicture(): Promise<string | null> {
+    return Promise.resolve(null)
+  }
   emit(event: string, arg?: unknown): void {
     for (const h of [...(this.handlers.get(event) ?? [])]) h(arg)
   }

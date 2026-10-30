@@ -4,18 +4,21 @@
  * Der Web-Dienst spricht nie selbst mit WhatsApp oder dem Medienhost. Fuer "Medium jetzt laden" legt er einen Befehl
  * ab; dieser Dienst holt ihn ab, laedt genau dieses Medium (ein HTTPS-Abruf, siehe MediaQueue.loadDeferred) und loescht
  * den Befehl. Zusaetzlich raeumt er regelmaessig zurueckgestellte Schluessel auf (Nachricht weg oder Medien-Aufbewahrung
- * abgelaufen).
+ * abgelaufen). "refresh_avatar" (Chat geoeffnet) reicht er an avatars.ts weiter, das nur bei faelligem Bild fragt.
  *
  * Inhaltsfreies Protokoll: nur Befehlsart, Nachrichten-ID und Ergebnis.
  */
 import { deleteCommand, listCommands, type Database } from './dbClient.js'
 import { errorFields, type Logger } from './log.js'
+import type { RefreshResult } from './avatars.js'
 import type { LoadResult } from './mediaQueue.js'
 import { realScheduler, type Scheduler } from './timing.js'
 
 export interface CommandsDeps {
   db: Database
   queue: { loadDeferred(messageId: string): LoadResult; purgeDeferred(): number }
+  /** Nur mit profile_pictures = true; sonst werden refresh_avatar-Befehle verworfen. */
+  avatars?: { request(chatId: string): RefreshResult }
   log: Logger
   pollMs: number
   /** Abstand der Aufraeumlaeufe fuer zurueckgestellte Schluessel. Standard 10 Minuten. */
@@ -24,6 +27,7 @@ export interface CommandsDeps {
 }
 
 export const COMMAND_LOAD_MEDIA = 'load_media'
+export const COMMAND_REFRESH_AVATAR = 'refresh_avatar'
 
 export class IngestCommands {
   private readonly sched: Scheduler
@@ -68,6 +72,14 @@ export class IngestCommands {
           } catch (err) {
             this.d.log.error('command_load_media_failed', { msg_id: id, ...errorFields(err) })
           }
+        } else {
+          this.d.log.warn('command_invalid', { type: c.type })
+        }
+      } else if (c.type === COMMAND_REFRESH_AVATAR) {
+        const chatId = (c.payload as { chatId?: unknown } | null)?.chatId
+        if (typeof chatId === 'string' && chatId !== '' && chatId.length <= 256) {
+          const result = this.d.avatars ? this.d.avatars.request(chatId) : 'off'
+          this.d.log.debug('command_refresh_avatar', { result })
         } else {
           this.d.log.warn('command_invalid', { type: c.type })
         }

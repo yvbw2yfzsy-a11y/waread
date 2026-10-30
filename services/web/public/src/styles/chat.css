@@ -6,39 +6,41 @@
 .chat-head {
   position: relative; z-index: 5; display: flex; align-items: center; gap: 10px;
   padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
-  background: rgba(22, 23, 24, 0.82);
-  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--line);
+  background: var(--bar-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: var(--hairline) solid var(--line);
 }
 .chat-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.chat-title .name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-title .sub { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title .name { font-size: var(--fs-headline); line-height: 1.294; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-title .sub { font-size: var(--fs-footnote); line-height: 1.3; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .seen-pill {
   position: absolute; z-index: 4; top: 10px; left: 50%; transform: translateX(-50%);
-  background: rgba(44, 46, 48, 0.82); font-size: 13px;
+  background: var(--glass-bg); font-size: var(--fs-footnote);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-float);
 }
 
 .messages-wrap { position: relative; flex: 1; min-height: 0; }
 .messages {
   position: absolute; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
   overflow-anchor: none; overscroll-behavior: contain; outline: none;
-  padding: 8px 10px 14px;
+  padding: 8px 12px 14px;
 }
-.older { min-height: 8px; padding: 10px; text-align: center; font-size: 12px; color: var(--text-dim); }
+.older { min-height: 8px; padding: 10px; text-align: center; font-size: var(--fs-caption1); color: var(--text-dim); }
 
+/* Date as a small capsule, like WhatsApp on iOS. */
 .day-sep { display: flex; justify-content: center; margin: 14px 0 8px; }
 .day-sep span {
-  padding: 5px 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.08);
-  font-size: 13px; font-weight: 600;
+  padding: 5px 12px; border-radius: var(--r-pill); background: var(--bg-elev);
+  box-shadow: inset 0 0 0 var(--hairline) rgba(255, 255, 255, 0.06);
+  font-size: var(--fs-footnote); line-height: 1.3; font-weight: 600;
 }
 
 /* Yellow divider at the first unseen message when the chat opens. */
 .new-divider {
   display: flex; align-items: center; gap: 10px; margin: 14px 0 10px;
-  color: var(--yellow); font-size: 13px; font-weight: 700;
+  color: var(--yellow); font-size: var(--fs-footnote); font-weight: 600;
 }
 .new-divider::before, .new-divider::after { content: ""; flex: 1; height: 1px; background: var(--yellow); opacity: 0.7; }
 .new-divider span { white-space: nowrap; }
@@ -46,41 +48,63 @@
 /* Slim bar under the header while something is unseen; it takes height instead of floating over the messages. */
 .new-bar {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 6px 12px; background: var(--bg-elev); border-bottom: 1px solid var(--line);
-  font-size: 13px; font-weight: 700; color: var(--yellow);
+  padding: 6px 12px; background: var(--bg-elev); border-bottom: var(--hairline) solid var(--line);
+  font-size: var(--fs-footnote); font-weight: 600; color: var(--yellow);
 }
 .chat-banner { margin: 0; border-radius: 0; }
 
 /* ---------- bubbles ---------- */
 
-.msg-row { position: relative; display: flex; margin: 2px 0; }
+/* Consecutive messages from the same side form a group: 2 px apart, a tail only on the first bubble, a small radius
+   where two bubbles meet. A day separator or the "new" divider ends a group. */
+.msg-row { position: relative; display: flex; margin: 8px 0 0; }
 .msg-row.in { justify-content: flex-start; }
 .msg-row.out { justify-content: flex-end; }
+.msg-row.in + .msg-row.in, .msg-row.out + .msg-row.out { margin-top: 2px; }
 
 .bubble {
   position: relative; max-width: min(82%, 560px); padding: 7px 10px 6px;
-  border-radius: 16px; font-size: 16.5px; line-height: 1.32; overflow-wrap: anywhere;
+  border-radius: var(--r-lg); font-size: var(--fs-body); line-height: var(--lh-body); overflow-wrap: anywhere;
 }
-.in .bubble { background: var(--bubble-in); border-bottom-left-radius: 5px; }
-.out .bubble { background: var(--bubble-out); border-bottom-right-radius: 5px; }
+.in .bubble { background: var(--bubble-in); border-top-left-radius: 0; }
+.out .bubble { background: var(--bubble-out); border-top-right-radius: 0; }
+
+/* Tail: a small concave wedge at the top outer corner of the first bubble in a group. */
+.bubble::after { content: ""; position: absolute; top: 0; width: 8px; height: 13px; pointer-events: none; }
+.in .bubble::after { left: -7px; background: radial-gradient(ellipse 100% 100% at 0 100%, transparent 94%, var(--bubble-in) 100%); }
+.out .bubble::after { right: -7px; background: radial-gradient(ellipse 100% 100% at 100% 100%, transparent 94%, var(--bubble-out) 100%); }
+.msg-row.in + .msg-row.in .bubble { border-top-left-radius: var(--r-xs); }
+.msg-row.out + .msg-row.out .bubble { border-top-right-radius: var(--r-xs); }
+.msg-row.in + .msg-row.in .bubble::after, .msg-row.out + .msg-row.out .bubble::after { content: none; }
+/* Where supported (:has), the bubble above a follower gets the small radius at its bottom corner as well. */
+.msg-row.in:has(+ .msg-row.in) .bubble { border-bottom-left-radius: var(--r-xs); }
+.msg-row.out:has(+ .msg-row.out) .bubble { border-bottom-right-radius: var(--r-xs); }
+/* Group chats: each incoming bubble names its sender, so different people must not merge into one group. */
+.msg-row.in:has(.sender) + .msg-row.in:has(.sender) { margin-top: 8px; }
+.msg-row.in:has(.sender) + .msg-row.in:has(.sender) .bubble { border-top-left-radius: 0; }
+.msg-row.in:has(.sender) + .msg-row.in:has(.sender) .bubble:not(.is-sticker)::after { content: ""; }
+.msg-row.in:has(.sender):has(+ .msg-row.in .sender) .bubble { border-bottom-left-radius: var(--r-lg); }
 
 /* Per-message "new" marker (local only). */
 .bubble:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 .bubble { cursor: pointer; }
 .bubble.is-sticker { background: transparent; padding: 0; }
+.bubble.is-sticker::after { content: none; }
 
 /* Labels on a bubble (deleted, "Einmal"): text and symbol, no colour needed. Shapes differ: dashed = deleted. */
 .tag {
   display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; margin: 0 0 5px;
-  padding: 3px 9px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 9px;
-  font-size: 12.5px; font-weight: 600; color: rgba(255, 255, 255, 0.85);
+  padding: 3px 9px; border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  font-size: var(--fs-footnote); line-height: 1.3; font-weight: 600; color: rgba(255, 255, 255, 0.85);
 }
 .tag-deleted { border-style: dashed; }
 .meta-shield { display: inline-flex; margin-right: 5px; vertical-align: -2px; }
 .meta-edit {
-  display: inline; margin: -8px 5px -8px 0; padding: 8px 2px; border: 0; background: none;
-  font-size: 11.5px; line-height: 1; text-decoration: underline; color: inherit;
+  position: relative; display: inline; margin: -8px 5px -8px 0; padding: 8px 2px; border: 0; background: none;
+  font-size: var(--fs-caption1); line-height: 1; text-decoration: underline; color: inherit;
 }
+/* A larger hit area for the small "bearbeitet" button. */
+.meta-edit::after { content: ""; position: absolute; inset: -14px -6px -8px; } /* more upwards: below is the next bubble */
 .text.deleted-body { padding-top: 2px; }
 
 .msg-row.is-new .bubble::before {
@@ -96,32 +120,34 @@
 
 .text { margin: 0; white-space: pre-wrap; }
 .text::after { content: ""; display: table; clear: both; }
-.text.deleted { color: var(--text-dim); font-style: italic; }
+.text.deleted { color: var(--text-on-bubble); font-style: italic; }
 .text.deleted .icon { margin-right: 6px; vertical-align: -2px; }
 .text.caption { padding: 5px 7px 2px; }
-.link { color: #7cc4ff; text-decoration: underline; overflow-wrap: anywhere; }
+.bubble .muted { color: var(--text-on-bubble); }
+.link { color: var(--link); text-decoration: underline; overflow-wrap: anywhere; }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.92em; background: rgba(0, 0, 0, 0.25); border-radius: 4px; padding: 0 3px; }
 .mono-block { display: block; margin: 3px 0; padding: 6px 8px; white-space: pre-wrap; }
 .text s { text-decoration: line-through; }
-.sender { display: block; margin-bottom: 2px; font-size: 14px; font-weight: 700; }
+.sender { display: block; margin-bottom: 2px; font-size: var(--fs-subhead); line-height: 1.33; font-weight: 600; }
 
 /* Time sits bottom right inside the bubble. */
 .meta {
-  float: right; margin: 6px 0 -3px 12px; font-size: 11.5px; line-height: 1;
-  color: rgba(255, 255, 255, 0.68); white-space: nowrap;
+  float: right; margin: 7px 0 -3px 12px; font-size: var(--fs-caption1); line-height: 1;
+  color: var(--meta-on-bubble); white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 
 /* ---------- reply quotes ---------- */
 
 .quote {
   display: flex; flex-direction: column; gap: 1px; min-width: 0; margin: 0 0 5px;
-  padding: 6px 10px; border-left: 4px solid var(--q, var(--link)); border-radius: 8px;
-  background: rgba(0, 0, 0, 0.22); font-size: 14px;
+  padding: 6px 10px; border-left: 4px solid var(--q, var(--link)); border-radius: var(--r-sm);
+  background: var(--quote-bg); font-size: var(--fs-subhead); line-height: 1.33;
 }
 .quote-link { cursor: pointer; }
-.quote-name { color: var(--q, var(--link)); font-weight: 700; }
+.quote-link:active { background: rgba(0, 0, 0, 0.32); }
+.quote-name { color: var(--q, var(--link)); font-weight: 600; }
 .quote-text {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--text-on-bubble);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .quote-text .icon { margin-right: 4px; vertical-align: -2px; }
@@ -131,64 +157,86 @@
 .bubble.has-media { padding: 3px; }
 .photo {
   display: block; width: min(72vw, 340px); max-width: 100%; padding: 0; border: 0;
-  border-radius: 13px; overflow: hidden; background: #1b1d1e; cursor: zoom-in;
+  border-radius: 15px; overflow: hidden; background: #1b1d1e; cursor: zoom-in;
 }
 .photo img { display: block; width: 100%; height: 100%; min-height: 120px; max-height: 70vh; object-fit: cover; }
 .photo.sticker { width: 150px; background: transparent; cursor: default; }
 .photo.sticker img { object-fit: contain; }
-.video { display: block; width: min(72vw, 340px); max-width: 100%; border-radius: 13px; background: #000; }
+.video { display: block; width: min(72vw, 340px); max-width: 100%; border-radius: 15px; background: #000; }
 
 .media-missing {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 220px; padding: 14px;
-  border-radius: 13px; background: rgba(0, 0, 0, 0.2); color: var(--text-dim); font-size: 14px;
+  border-radius: 15px; background: var(--inset-bg); color: var(--text-on-bubble); font-size: var(--fs-subhead); line-height: 1.33;
 }
 .media-missing-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; min-width: 0; }
-.media-missing-text strong { color: var(--text); font-size: 14px; }
+.media-missing-text strong { color: var(--text); font-size: var(--fs-subhead); font-weight: 600; }
 .media-missing .btn { margin-left: auto; }
 /* The time pill sits over the lower right of a captionless media bubble: leave room for it. */
 .bubble.meta-overlay .media-missing { padding-bottom: 36px; }
 
 /* Photo/video without caption: time as an overlay pill. */
 .bubble.meta-overlay .meta {
-  position: absolute; right: 9px; bottom: 8px; float: none; margin: 0; padding: 3px 7px;
-  border-radius: 10px; background: rgba(0, 0, 0, 0.5); color: #fff;
+  position: absolute; right: 9px; bottom: 8px; float: none; margin: 0; padding: 4px 8px;
+  border-radius: var(--r-pill); background: rgba(0, 0, 0, 0.5); color: #fff;
 }
 .bubble.has-media .meta { margin-right: 4px; }
 
 /* ---------- document tile ---------- */
 
 .bubble.has-doc { max-width: min(86%, 380px); }
-.doc { display: flex; align-items: center; gap: 10px; min-width: 240px; padding: 10px; border-radius: 12px; background: rgba(0, 0, 0, 0.2); }
-.doc-icon { color: var(--text-dim); }
+.doc { display: flex; align-items: center; gap: 10px; min-width: 240px; padding: 10px; border-radius: 12px; background: var(--inset-bg); }
+.doc-icon { color: var(--text-on-bubble); }
 .doc-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .doc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.doc-sub { font-size: 12px; color: var(--text-dim); }
+.doc-sub { font-size: var(--fs-caption1); line-height: 1.33; color: var(--text-on-bubble); }
 .doc-dl {
-  display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
-  border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: inherit;
+  position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+  border-radius: 50%; background: var(--fill-selected); color: inherit;
 }
 
 /* ---------- voice player ---------- */
 
-.bubble.has-voice { min-width: min(270px, 80vw); }
-.voice { display: flex; align-items: center; gap: 8px; }
-.voice-lead { position: relative; display: flex; color: rgba(255, 255, 255, 0.65); }
+/* Styled after WhatsApp on iOS: a bare play symbol, thin rounded bars (played white, rest grey) with a round thumb at
+   the position, the duration under the bars and a dark speed capsule. Play, bars and speed share one centre line. */
+.bubble.has-voice { min-width: min(300px, 76vw); }
+.voice { display: flex; align-items: flex-start; gap: 8px; }
+.voice-lead { position: relative; display: flex; margin-top: 11px; color: var(--text-on-bubble); }
 .voice-dot { position: absolute; top: -3px; right: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--yellow); }
 .play {
-  display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
-  padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.14);
+  position: relative; display: flex; align-items: center; justify-content: center; flex: none; width: 40px; height: 40px;
+  padding: 0; border: 0; border-radius: 50%; background: transparent; color: #fff;
 }
-.voice-main { flex: 1; min-width: 0; }
-.wave { display: flex; align-items: center; gap: 2px; height: 30px; cursor: pointer; touch-action: pan-y; }
-.voice-main { min-width: 0; }
-.wave i { flex: 1; min-width: 2px; max-width: 4px; align-self: center; border-radius: 2px; background: rgba(255, 255, 255, 0.32); }
+/* Opacity on the whole symbol (not an rgba colour), so fill and rounded stroke do not overlap into a darker rim. */
+.play svg { width: 30px; height: 30px; opacity: 0.72; }
+/* Slightly rounded corners on the play triangle and the pause bars. */
+.play svg path, .play svg rect { stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.voice-main { flex: 1; min-width: 0; padding-top: 5px; }
+/* space-between: the bars always span the whole slider, so a tap lands where the bar is drawn. */
+.wave { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 2px; height: 30px; cursor: pointer; touch-action: pan-y; }
+.wave i {
+  position: relative; flex: 0 1 3px; min-width: 2px; min-height: 3px; align-self: center;
+  border-radius: var(--r-pill); background: rgba(255, 255, 255, 0.3);
+}
 .wave i.on { background: var(--text); }
-.voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 2px; font-size: 12px; color: rgba(255, 255, 255, 0.62); }
-/* Right of the waveform, a real tap target (44 x 40 px). */
-.speed {
-  flex: none; min-width: 44px; height: 40px; padding: 0 6px; border: 0; border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14); font-size: 13px; font-weight: 700;
+/* Thumb: before the first unplayed bar, at the start before playing, at the end when all bars are played. */
+.wave i.on + i:not(.on)::before, .wave i:first-child:not(.on)::before, .wave i.on:last-child::after {
+  content: ""; position: absolute; z-index: 1; top: 50%; width: 13px; height: 13px; margin-top: -6.5px;
+  border-radius: 50%; background: var(--thumb, var(--link)); pointer-events: none;
 }
+.wave i.on + i:not(.on)::before { left: -7.5px; }
+.wave i:first-child:not(.on)::before { left: -6.5px; }
+.wave i.on:last-child::after { right: -6.5px; }
+/* Not yet listened to (incoming): yellow thumb, matching the yellow dot at the microphone. */
+.voice:has(.voice-dot:not([hidden])) { --thumb: var(--yellow); }
+.voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; font-size: var(--fs-subhead); line-height: 1.2; color: var(--meta-on-bubble); font-variant-numeric: tabular-nums; }
+/* Right of the waveform, a real tap target (44 x 40 px, hit area 44 x 44). */
+.speed {
+  position: relative; flex: none; min-width: 52px; height: 40px; padding: 0 12px; border: 0; border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-size: var(--fs-subhead); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+/* 40 px circles keep the bubble compact; the hit area is 44 x 44. */
+.play::after, .doc-dl::after, .speed::after { content: ""; position: absolute; inset: -2px; }
+.speed::after { inset: -2px 0; }
 .voice.broken .play { opacity: 0.5; }
 .bubble.has-voice .meta { display: block; float: none; margin: 2px 2px -2px 0; text-align: right; }
 
@@ -197,24 +245,26 @@
 .to-bottom {
   position: absolute; right: 14px; bottom: 14px; z-index: 4; display: none;
   align-items: center; justify-content: center; width: 44px; height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 50%;
-  background: rgba(44, 46, 48, 0.88);
+  border: 1px solid var(--glass-stroke); border-radius: 50%;
+  background: var(--float-bg); box-shadow: var(--shadow-float), var(--glass-shine);
 }
 .to-bottom.show { display: flex; }
 .to-bottom[data-count]:not([data-count=""])::after {
   content: attr(data-count); position: absolute; top: -6px; right: -4px; padding: 1px 6px;
-  border-radius: 10px; background: var(--yellow); color: var(--yellow-ink); font-size: 12px; font-weight: 800;
+  border-radius: 10px; background: var(--yellow); color: var(--yellow-ink); font-size: var(--fs-caption1); font-weight: 700;
 }
 
 /* Slim single row: the text takes the remaining width and wraps, the button keeps its size. */
 .readonly-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line); background: var(--bg-elev); color: var(--text-dim); font-size: 13px; line-height: 1.25;
+  border-top: var(--hairline) solid var(--line); background: var(--bar-bg); color: var(--text-dim);
+  font-size: var(--fs-footnote); line-height: 1.3;
 }
 .ro-text { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; }
-.readonly-bar .btn { flex: none; padding: 10px 14px; min-height: 40px; font-size: 14px; }
-.ro-hint { flex-basis: 100%; font-size: 12.5px; }
+.readonly-bar .btn { position: relative; flex: none; padding: 10px 14px; min-height: 40px; font-size: var(--fs-subhead); color: var(--text); }
+.readonly-bar .btn::after { content: ""; position: absolute; inset: -3px 0; }
+.ro-hint { flex-basis: 100%; font-size: var(--fs-footnote); }
 
 /* ---------- full-screen image viewer ---------- */
 
@@ -233,23 +283,24 @@ html.lb-open, html.lb-open body { overflow: hidden; }
 .lb-btn {
   display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border: 0;
   border-radius: 50%; background: rgba(255, 255, 255, 0.14); color: #fff; text-decoration: none;
+  box-shadow: var(--glass-shine), inset 0 0 0 var(--hairline) var(--glass-stroke);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
-.lb-count { color: #fff; font-size: 15px; font-weight: 600; }
+.lb-count { color: #fff; font-size: var(--fs-subhead); font-weight: 600; font-variant-numeric: tabular-nums; }
 .lb-actions { display: flex; gap: 8px; }
 .lb-btn.on { box-shadow: inset 0 0 0 2px #fff; }
 .lb-nav {
   position: absolute; z-index: 2; top: 50%; display: none; align-items: center; justify-content: center;
-  width: 48px; height: 64px; transform: translateY(-50%); border: 0; border-radius: 12px;
+  width: 48px; height: 64px; transform: translateY(-50%); border: 0; border-radius: var(--r-md);
   background: rgba(255, 255, 255, 0.12); color: #fff;
 }
 @media (hover: hover) and (pointer: fine) { .lb-nav { display: flex; } }
 .lb-prev { left: 12px; }
 .lb-next { right: 12px; }
 .lb-caption {
-  position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; text-align: center; color: #fff; font-size: 14px;
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; text-align: center; color: #fff; font-size: var(--fs-subhead);
   padding: 16px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
   transition: opacity 0.2s;
 }
-.lb-caption p { margin: 0 0 4px; font-size: 16px; }
+.lb-caption p { margin: 0 0 4px; font-size: var(--fs-callout); }
 .lightbox.chrome-hidden .lb-top, .lightbox.chrome-hidden .lb-caption, .lightbox.chrome-hidden .lb-nav { opacity: 0; pointer-events: none; }
