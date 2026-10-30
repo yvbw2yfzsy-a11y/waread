@@ -69,13 +69,13 @@ max_mb_forced = 500                        # größtes Medium, das „Medium jet
 # dann einschalten. Mit true lädt der Ingest solche Medien bei Ankunft herunter (ein HTTPS-Abruf je Medium, wie bei jedem
 # Auto-Download); der Absender erwartet bei Einmal-Medien, dass nichts bleibt.
 store_view_once = false
-# Profilbilder der Chats (docs/PROFILBILDER.md). Ab Werk aus. Mit true fragt der Ingest je Chat höchstens einmal pro
-# profile_pictures_interval_days bei WhatsApp nach dem Profilbild (eine Abfrage, keine Nachricht, keine Quittung) und lädt
-# ein sichtbares Bild per HTTPS. Abstand zwischen zwei Abfragen: profile_pictures_gap_seconds (±30 %).
+# Profilbilder der Chats (docs/PROFILBILDER.md). Ab Werk aus. Mit true fragt der Ingest beim Öffnen eines Chats in der
+# Oberfläche bei WhatsApp nach dessen Profilbild, aber nur, wenn die letzte Abfrage für diesen Chat älter als
+# profile_pictures_interval_days ist (eine Abfrage, keine Nachricht, keine Quittung), und lädt ein sichtbares Bild per HTTPS.
 profile_pictures = false
 profile_pictures_interval_days = 7         # 1..90
-profile_pictures_gap_seconds = 15          # 3..600
-profile_pictures_max_per_round = 40        # 1..500, Abfragen am Stück
+profile_pictures_gap_seconds = 5           # 3..600, Mindestabstand zwischen zwei Abfragen
+profile_pictures_max_per_day = 100         # 1..1000
 
 # Wiederverbindung nach Verbindungsverlust
 backoff_start_seconds = 5

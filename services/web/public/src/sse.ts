@@ -102,6 +102,10 @@ export function startEvents(h: SseHandlers): () => void {
       const d = parse(ev);
       h.onHistorySynced({ stored: d && typeof d.stored === 'number' ? d.stored : 0 });
     });
+    source.addEventListener('avatar_updated', (ev) => {
+      const d = parse(ev);
+      if (d && typeof d.chatId === 'string') h.onAvatarUpdated({ chatId: d.chatId });
+    });
     source.addEventListener('cleanup_done', (ev) => {
       const d = parse(ev);
       if (!d) return;

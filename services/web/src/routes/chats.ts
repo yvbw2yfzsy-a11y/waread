@@ -1,9 +1,9 @@
 import type { App } from '../context.js';
-import { markSeen, setSetting } from '../db.js';
+import { enqueueCommand, getSetting, markSeen, setSetting } from '../db.js';
 import { emitMessageUpdated } from '../emit.js';
 import { mimeFromExt, resolveInside, serveFile } from '../files.js';
 import { asObject, HttpError, readJson, type Router, sendJson } from '../http.js';
-import { chatExists, getAvatarPath, listChats, mutedChatIds } from '../queries.js';
+import { chatExists, getAvatarPath, hasPendingAvatarRefresh, listChats, mutedChatIds } from '../queries.js';
 import { withTx } from '../sqlite.js';
 
 /** Hoechstzahl gleichzeitig stummer Chats (Schutz vor unbegrenztem Wachstum der Einstellung). */
@@ -26,6 +26,20 @@ export function registerChatRoutes(r: Router, app: App): void {
     if (!real) throw new HttpError(404, 'not_found');
     c.res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     await serveFile(c, real, { contentType: type, disposition: 'inline', cacheControl: 'private, max-age=3600' });
+  });
+
+  // Chat geoeffnet: Profilbild aktualisieren, falls faellig. Der Web-Dienst spricht nie selbst mit WhatsApp; er legt nur
+  // den Befehl "refresh_avatar" ab, und nur, wenn der Ingest den Abruf eingeschaltet hat (settings avatars.enabled).
+  // Ob das Bild faellig ist (Intervall, Tagesgrenze, Pause), entscheidet der Ingest (avatars.ts).
+  r.add('POST', '/api/chats/:id/avatar/refresh', (c) => {
+    const chatId = c.params['id']!;
+    if (!chatExists(app.db, chatId)) throw new HttpError(404, 'chat_not_found');
+    if (getSetting(app.db, 'avatars.enabled') !== '1') {
+      sendJson(c.res, 200, { ok: true, queued: false });
+      return;
+    }
+    if (!hasPendingAvatarRefresh(app.db, chatId)) enqueueCommand(app.db, 'refresh_avatar', { chatId });
+    sendJson(c.res, 202, { ok: true, queued: true });
   });
 
   // "Stumm": rein lokale Anzeige-Einstellung (settings chat.muted). Der Chat bleibt in der Liste, zaehlt aber nicht in

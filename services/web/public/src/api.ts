@@ -412,6 +412,14 @@ export const api = {
     await json('POST', `/api/media/${enc(messageId)}/load`);
   },
 
+  /**
+   * Chat opened: asks for a fresh profile picture. Only stores a command; the ingest service decides whether the picture
+   * is due (and whether profile pictures are switched on at all) and reports a change via avatar_updated.
+   */
+  async refreshAvatar(chatId: string): Promise<void> {
+    await json('POST', `/api/chats/${enc(chatId)}/avatar/refresh`);
+  },
+
   async muteChat(chatId: string, muted: boolean): Promise<void> {
     await json('PUT', `/api/chats/${enc(chatId)}/mute`, { muted });
   },

@@ -3,11 +3,11 @@
  * Getrennt von index.ts, damit der Gesamtweg "Ereignis -> Datenbank -> Medium" testbar ist.
  */
 import type { AuthStore } from './authStore.js'
-import { AvatarSync } from './avatars.js'
+import { AVATAR_ENABLED_KEY, AvatarSync } from './avatars.js'
 import type { IngestConfig } from './config.js'
 import { IngestCommands } from './commands.js'
 import { ConnectionManager } from './connection.js'
-import type { Database } from './dbClient.js'
+import { setSetting, type Database } from './dbClient.js'
 import type { JobStore } from './jobStore.js'
 import { errorFields, type Logger } from './log.js'
 import { MediaQueue } from './mediaQueue.js'
@@ -46,7 +46,8 @@ export interface Service {
 export function createService(d: ServiceDeps): Service {
   const { cfg, log, db, jobs, auth } = d
 
-  // Profilbilder: nur mit profile_pictures = true (Abfrage an WhatsApp, siehe avatars.ts). Die Verbindung kommt weiter unten.
+  // Profilbilder: nur mit profile_pictures = true (Abfrage an WhatsApp beim Oeffnen eines Chats, siehe avatars.ts).
+  // Die Verbindung kommt weiter unten.
   let conn: ConnectionManager | null = null
   const downloadPicture = d.lib.downloadProfilePicture
   const avatars =
@@ -63,6 +64,8 @@ export function createService(d: ServiceDeps): Service {
           ...(d.scheduler ? { scheduler: d.scheduler } : {}),
         })
       : null
+  // Ohne Abruf legt der Web-Dienst keine Befehle "refresh_avatar" ab.
+  if (!avatars) setSetting(db, AVATAR_ENABLED_KEY, '0')
 
   // Der Handler kennt die Aufbewahrung, die Warteschlange braucht sie (isExpired) -> Referenz nachtraeglich setzen.
   let handler: MessageHandler | null = null
@@ -133,6 +136,7 @@ export function createService(d: ServiceDeps): Service {
   const commands = new IngestCommands({
     db,
     queue,
+    ...(avatars ? { avatars } : {}),
     log,
     pollMs: cfg.connection.commandPollMs,
     ...(d.scheduler ? { scheduler: d.scheduler } : {}),
