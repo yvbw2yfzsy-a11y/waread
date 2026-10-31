@@ -58,7 +58,7 @@ export function createService(d: ServiceDeps): Service {
           mediaDir: cfg.paths.mediaDir,
           log,
           isConnected: () => conn?.getStatus() === 'connected',
-          query: (jid) => (conn ? conn.profilePicture(jid) : Promise.reject(new Error('not_connected'))),
+          askPicture: (jid) => (conn ? conn.profilePicture(jid) : Promise.reject(new Error('not_connected'))),
           download: (url) => downloadPicture(url),
           shrink: (src, dest, side) => createThumbnail(src, dest, side),
           ...(d.scheduler ? { scheduler: d.scheduler } : {}),

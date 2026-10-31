@@ -10,7 +10,7 @@ import ts from 'typescript'
  * Kommentare zaehlen nicht. Ein Name ist verboten, wenn
  *   - eines seiner Woerter (camelCase/snake_case/Punkt-getrennt) "read", "presence" oder "send" ist, oder
  *   - er in FORBIDDEN_NAMES steht (ausgehende Aktionen ohne diese Woerter, z. B. logout, groupMetadata).
- * Ausnahmen gibt es nur ueber ALLOWED_NAMES (exakte Namen, begruendet).
+ * Ausnahmen gibt es nur ueber ALLOWED_NAMES (exakte Namen, begruendet) und WALIB_ONLY_NAMES (nur in waLib.ts).
  */
 
 export const FORBIDDEN_WORDS = new Set(['read', 'presence', 'send'])
@@ -50,6 +50,13 @@ export const FORBIDDEN_NAMES = new Set([
  * Jede Ergaenzung hier ist eine Sicherheitsentscheidung und gehoert ins Review.
  */
 export const ALLOWED_NAMES = new Set(['readFileSync'])
+
+/**
+ * Namen aus FORBIDDEN_NAMES, die NUR in waLib.ts stehen duerfen, und dort nur als Aufruf am rohen Socket, den checkShell
+ * einzeln zulaesst. profilePictureUrl: Profilbild-Abfrage fuer avatars.ts (Chat geoeffnet, Bild faellig), ab Werk aus
+ * (profile_pictures = false). Entscheidung des Nutzers vom 31.10.2026. In jeder anderen Datei bleibt der Name verboten.
+ */
+export const WALIB_ONLY_NAMES = new Set(['profilePictureUrl'])
 
 export interface Finding {
   file: string
@@ -112,18 +119,22 @@ export function listSourceFiles(dir: string): string[] {
 }
 
 export function scanTree(dir: string): Finding[] {
-  return listSourceFiles(dir).flatMap((f) => scanSource(f, fs.readFileSync(f, 'utf8')))
+  return listSourceFiles(dir).flatMap((f) => {
+    const found = scanSource(f, fs.readFileSync(f, 'utf8'))
+    return path.basename(f) === 'waLib.ts' ? found.filter((x) => !WALIB_ONLY_NAMES.has(x.name)) : found
+  })
 }
 
 /**
  * Strukturpruefung der Huelle in waLib.ts:
- *  - `raw` (das rohe Socket-Objekt) darf nur als raw.ev.on, raw.ev.off und raw.end verwendet werden,
- *  - das Interface WaSocket hat genau die Mitglieder ev und end.
+ *  - `raw` (das rohe Socket-Objekt) darf nur als raw.ev.on, raw.ev.off, raw.end und raw.profilePictureUrl verwendet
+ *    werden,
+ *  - das Interface WaSocket hat genau die Mitglieder ev, end und profilePicture.
  */
 export function checkShell(source: string): string[] {
   const sf = ts.createSourceFile('waLib.ts', source, ts.ScriptTarget.Latest, true)
   const problems: string[] = []
-  const allowed = new Set(['raw.ev.on', 'raw.ev.off', 'raw.end'])
+  const allowed = new Set(['raw.ev.on', 'raw.ev.off', 'raw.end', 'raw.profilePictureUrl'])
   const used = new Set<string>()
 
   const chainText = (n: ts.Expression): string | null => {
@@ -152,7 +163,7 @@ export function checkShell(source: string): string[] {
     }
     if (ts.isInterfaceDeclaration(node) && node.name.text === 'WaSocket') {
       const members = node.members.map((m) => (m.name && ts.isIdentifier(m.name) ? m.name.text : '?')).sort()
-      if (members.join(',') !== 'end,ev') problems.push(`WaSocket hat Mitglieder: ${members.join(',')}`)
+      if (members.join(',') !== 'end,ev,profilePicture') problems.push(`WaSocket hat Mitglieder: ${members.join(',')}`)
     }
     ts.forEachChild(node, visit)
   }

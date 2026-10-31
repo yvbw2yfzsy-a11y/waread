@@ -1,10 +1,12 @@
 # waread
 
-waread ist eine **rein lesende** Web-Oberfläche für die eigenen WhatsApp-Nachrichten, gedacht für einen Raspberry Pi im Heimnetz. Der Pi verbindet sich als „verknüpftes Gerät“ (Node.js, TypeScript, Baileys), speichert Nachrichten und Medien für wenige Tage in SQLite und zeigt sie im Browser an. Das Programm sendet nichts an WhatsApp zurück: keine Nachricht, keine Lesebestätigung, kein bewusst gesetzter Online-Status. Dass das so bleibt, sichert ein automatischer Test im Code. Was die Bibliothek intern selbst sendet, kann nur der Zweitnummer-Test zeigen (`docs/SECURITY_TESTS.md`).
+waread ist eine **rein lesende** Web-Oberfläche für die eigenen WhatsApp-Nachrichten, gedacht für einen Raspberry Pi im Heimnetz. Der Pi verbindet sich als „verknüpftes Gerät“ (Node.js, TypeScript, Baileys), speichert Nachrichten und Medien für wenige Tage in SQLite und zeigt sie im Browser an. Das Programm sendet keine Nachricht, keine Lesebestätigung und keinen bewusst gesetzten Online-Status an WhatsApp. Einzige Ausnahme, ab Werk aus: Mit `profile_pictures = true` fragt es beim Öffnen eines Chats dessen Profilbild ab, höchstens einmal pro Woche und Chat (`docs/PROFILBILDER.md`). Dass das so bleibt, sichert ein automatischer Test im Code (der Sende-Wächter). Was die Bibliothek intern selbst sendet, kann nur der Zweitnummer-Test zeigen (`docs/SECURITY_TESTS.md`).
 
-**Version 2 (Branch `claude/waread-design-features-5qn19p`)** ergänzt: Schild (Nachrichten vor dem Löschen schützen), „Vom Absender gelöscht“ und Bearbeitungsverlauf, Zitate mit Text, „Medium jetzt laden“, Sichern auf dem Gerät, Einmal-Medien (Schalter, Standard aus), stumme Chats, Korrekturen am Layout. Was zu tun ist und was ungeprüft bleibt: `docs/VERSION2.md`.
+**Version 2** ergänzt: Schild (Nachrichten vor dem Löschen schützen), „Vom Absender gelöscht“ und Bearbeitungsverlauf, Zitate mit Text, „Medium jetzt laden“, Sichern auf dem Gerät, Einmal-Medien (Schalter, Standard aus), stumme Chats, Korrekturen am Layout. Was zu tun ist und was ungeprüft bleibt: `docs/VERSION2.md`.
 
-Stand: Version 0.1.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
+**Version 0.2.0** bringt außerdem eine Oberfläche im Stil von iOS mit WhatsApp-Aufbau (`docs/DESIGN.md`) und Profilbilder (ab Werk aus, `docs/PROFILBILDER.md`). Einspielen und Prüfen: `docs/RELEASE-0.2.0.md`.
+
+Stand: Version 0.2.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
 
 ## Aufbau
 
@@ -41,6 +43,8 @@ Installation auf dem Pi, Konfiguration, Kopplung und die Prüfungen vor dem Haup
 | `docs/TEST_CHECKLIST.md` | Was die automatisierten Tests belegen müssen; Sabotage-Proben |
 | `docs/VERSION2.md` | Version 2: was neu ist, Einspielen auf dem Pi, Einmal-Medien, Schild und Aufbewahrung, zusätzlicher Verkehr, Ungeprüftes |
 | `docs/DESIGN.md` | Gestaltung im iOS-Stil: Variablen, Kontrastwerte, Tippflächen, was geprüft ist und was nicht |
+| `docs/PROFILBILDER.md` | Profilbilder: Ablauf, Grenzen, Verkehr, warum „blockiert“ nicht erkennbar ist |
+| `docs/RELEASE-0.2.0.md` | Release 0.2.0: Inhalt, Bauen, Einspielen auf dem Pi, Prüfschritte, Ungeprüftes |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
 | `services/*/README.md`, `cleanup/README.md`, `db/README.md` | Verhalten und Grenzen je Baustein |

@@ -33,8 +33,8 @@ Das Gate muss **vollständig grün** sein, bevor (a) der Zweitnummer-Test beginn
 
 | Nr. | Prüfung | Bestanden, wenn |
 | --- | --- | --- |
-| G1 | **Code-Scan auf verbotene WhatsApp-Aufrufe**: `npm run check:no-send`, siehe 1.1 | Exit-Code 0, 32 von 32 Prüfungen grün (Quellcode von `services/ingest/src`); zusätzlich die Gegenprobe mit `grep` über das gebaute Ergebnis |
-| G2 | **Verhaltenstest „Fake-Verbindung“**: `npm test -w waread-ingest` (u. a. `test/waLib.test.ts` und `test/service.e2e.test.ts`, siehe [TEST_CHECKLIST.md](TEST_CHECKLIST.md), Abschnitt F) | grün; die Hülle reicht nur `ev.on`, `ev.off` und `end` des Sockets durch, die Verbindungsoptionen stimmen |
+| G1 | **Code-Scan auf verbotene WhatsApp-Aufrufe**: `npm run check:no-send`, siehe 1.1 | Exit-Code 0, 34 von 34 Prüfungen grün (Quellcode von `services/ingest/src`; einzige Ausnahme: die Profilbild-Abfrage in `waLib.ts`, siehe `docs/PROFILBILDER.md`); zusätzlich die Gegenprobe mit `grep` über das gebaute Ergebnis |
+| G2 | **Verhaltenstest „Fake-Verbindung“**: `npm test -w waread-ingest` (u. a. `test/waLib.test.ts` und `test/service.e2e.test.ts`, siehe [TEST_CHECKLIST.md](TEST_CHECKLIST.md), Abschnitt F) | grün; die Hülle reicht nur `ev.on`, `ev.off`, `end` und die Profilbild-Abfrage (`profilePicture`) des Sockets durch, die Verbindungsoptionen stimmen |
 | G3 | **Abhängigkeiten festgeschrieben und unverdächtig**, siehe 1.2 | `package-lock.json` vorhanden, Paket `baileys` mit exakter Version, kein Fremd-Fork |
 | G4 | **Änderungen der Bibliothek angesehen** (nur bei Bibliotheksupdate) | Release-Notes und Unterschied der Lock-Datei gelesen; besonders auf neue Standardwerte bei Verbindungsoptionen und automatisch gesendete Meldungen geachtet |
 | G5 | **Verbindungsoptionen unverändert** | Der Teil des Ingest-Codes, der die Verbindung zur Bibliothek aufbaut (`createSocket` in `services/ingest/src/waLib.ts`, dort u. a. `markOnlineOnConnect: false`), unterscheidet sich nicht von der zuletzt bestandenen Prüfung – oder die Änderung ist begründet und dokumentiert |

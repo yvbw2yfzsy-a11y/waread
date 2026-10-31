@@ -1,6 +1,6 @@
 {
   "name": "waread-cleanup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "waread: Aufräum-Dienst (Aufbewahrungsfristen, verwaiste Dateien, WAL-Checkpoint, VACUUM)",
   "type": "module",

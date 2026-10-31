@@ -29,7 +29,17 @@ Stand: Oktober 2026 · Gilt für: waread mit Baileys `7.0.0-rc14`
 
 ## Was waread selbst nie auslöst (vom Wächter und der Hülle gesichert)
 
-Lesebestätigung (blaue Haken), „abgespielt“, Tippanzeige, Nachrichten, Gruppen- und Profilabfragen, Abmelden (`logout`), Statusabfragen, Anruf-Ablehnung. Die Hülle reicht von der Bibliothek nur `ev.on`, `ev.off` und `end` durch. Das schließt **nicht** aus, dass die Bibliothek diese Funktionen intern selbst aufruft; im gelesenen Quelltext tut sie es für die Lese-/Abgespielt-Bestätigung nicht automatisch.
+Lesebestätigung (blaue Haken), „abgespielt“, Tippanzeige, Nachrichten, Gruppenabfragen, Profilabfragen außer dem Profilbild (siehe unten), Abmelden (`logout`), Statusabfragen, Anruf-Ablehnung. Die Hülle reicht von der Bibliothek nur `ev.on`, `ev.off` und `end` durch. Das schließt **nicht** aus, dass die Bibliothek diese Funktionen intern selbst aufruft; im gelesenen Quelltext tut sie es für die Lese-/Abgespielt-Bestätigung nicht automatisch.
+
+## Was waread nur auf Wunsch auslöst
+
+| Wann | Was | Schalter |
+| --- | --- | --- |
+| Chat in der Oberfläche geöffnet, letzte Abfrage für diesen Chat älter als `profile_pictures_interval_days` (Standard 7) | eine Profilbild-Abfrage `iq type=get xmlns=w:profile:picture` (`chats.ts`, `profilePictureUrl`), bei sichtbarem Bild dazu ein HTTPS-GET an `pps.whatsapp.net`; mindestens 5 s Abstand, höchstens 100 am Tag, nach 429 ruht der Abruf 24 h | `profile_pictures = true` (ab Werk **aus**), `docs/PROFILBILDER.md` |
+| „Medium jetzt laden“ oder Schild an einem ladbaren Medium | ein HTTPS-GET an den Medienhost je Medium | Tipp in der Oberfläche, `docs/VERSION2.md` |
+| Einmal-Medien bei Ankunft | ein HTTPS-GET je Einmal-Medium | `store_view_once = true` (ab Werk aus) |
+
+Die Profilbild-Abfrage ist die einzige Anfrage über die WhatsApp-Verbindung, die waread selbst stellen kann. Der Wächter lässt sie nur in `waLib.ts` zu (`WALIB_ONLY_NAMES`), sonst bleibt `profilePictureUrl` verboten.
 
 ## Messen statt raten: Zähler für ausgehende Knoten
 

@@ -1,6 +1,6 @@
 {
   "name": "waread",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "waread: schreibgeschützter WhatsApp-Leser für den Raspberry Pi",
   "type": "module",

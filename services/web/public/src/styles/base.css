@@ -10,10 +10,12 @@
   --bg-chat: #0b0b0c;
   --bg-elev: #1c1c1e;
   --bg-elev-2: #2c2c2e;
-  --bar-bg: rgba(22, 22, 24, 0.86);
   --glass-bg: rgba(30, 30, 33, 0.72);
   --glass-stroke: rgba(255, 255, 255, 0.12);
-  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  /* Glass-style controls that float on content (iOS 26): grey fill, light rim. */
+  --control-bg: rgba(120, 120, 128, 0.3);
+  --control-ring: inset 0 0 0 var(--hairline) rgba(255, 255, 255, 0.12);
   --scrim: rgba(0, 0, 0, 0.6);
   --float-bg: rgba(44, 44, 46, 0.95); /* toast, jump button */
 
@@ -179,8 +181,8 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 2px;
   min-width: 44px; height: 44px; padding: 0 10px;
-  border: 0; border-radius: var(--r-pill); background: var(--fill);
-  box-shadow: var(--glass-shine), inset 0 0 0 var(--hairline) var(--glass-stroke);
+  border: 0; border-radius: var(--r-pill); background: var(--control-bg);
+  box-shadow: var(--glass-shine), var(--control-ring);
 }
 .back-count { font-weight: 600; font-size: var(--fs-callout); }
 
@@ -194,8 +196,8 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 
 .status-chip {
   display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 44px;
-  border: 0; border-radius: var(--r-pill); background: var(--fill);
-  box-shadow: var(--glass-shine), inset 0 0 0 var(--hairline) var(--glass-stroke);
+  border: 0; border-radius: var(--r-pill); background: var(--control-bg);
+  box-shadow: var(--glass-shine), var(--control-ring);
   font-size: var(--fs-footnote); font-weight: 600;
 }
 
@@ -264,25 +266,31 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 
 /* ---------- floating glass navigation (iOS tab bar) ---------- */
 
+/* Nearly full width with equal tabs, as the iOS 26 tab bar. The list scrolls behind it. */
 .glass-nav {
   position: absolute; z-index: 20; left: 50%; transform: translateX(-50%);
   bottom: calc(12px + env(safe-area-inset-bottom));
-  display: flex; gap: 4px; padding: 6px; border-radius: var(--r-pill);
+  display: flex; gap: 4px; width: min(calc(100% - 40px), 400px); padding: 6px; border-radius: var(--r-pill);
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid var(--glass-stroke);
   box-shadow: var(--shadow-float), var(--glass-shine);
 }
 .tab {
-  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  min-width: 78px; padding: 7px 14px; border-radius: var(--r-pill);
+  position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 0; padding: 7px 6px; border-radius: var(--r-pill);
   color: var(--text-tab); text-decoration: none; font-size: var(--fs-caption2); line-height: 1.18; font-weight: 600;
 }
 .tab.on { background: var(--fill-selected); color: var(--text); box-shadow: var(--glass-shine); }
 /* Filled symbol for the selected tab, as iOS does. */
 .tab.on .icon-chats path, .tab.on .icon-settings path { fill: currentColor; fill-rule: evenodd; }
 .tab.on .icon-search svg { stroke-width: 2.4; }
-.tab-badge { position: absolute; top: 2px; right: 10px; min-width: 18px; height: 18px; font-size: var(--fs-caption2); }
+.tab-badge { position: absolute; top: 2px; left: calc(50% + 4px); min-width: 18px; height: 18px; font-size: var(--fs-caption2); }
+/* Scroll edge effect: the list fades softly where it passes behind the floating tab bar (HIG layout.md). */
+.pane-left::after {
+  content: ""; position: absolute; z-index: 15; left: 0; right: 0; bottom: 0; height: calc(96px + env(safe-area-inset-bottom));
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.78)); pointer-events: none;
+}
 
 /* ---------- shared controls ---------- */
 
@@ -296,8 +304,8 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 /* Capsule buttons without a stroke (iOS "gray" style); the border stays transparent so sizes do not change. */
 .btn {
   display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 9px 16px;
-  border: 1px solid transparent; border-radius: var(--r-pill);
-  background: var(--fill); font-size: var(--fs-subhead); line-height: var(--lh-tight); font-weight: 600; text-decoration: none;
+  border: 1px solid transparent; border-radius: var(--r-pill); box-shadow: var(--glass-shine), var(--control-ring);
+  background: var(--control-bg); font-size: var(--fs-subhead); line-height: var(--lh-tight); font-weight: 600; text-decoration: none;
 }
 .btn.primary { background: var(--accent); }
 .btn.danger { background: var(--danger-fill); }
@@ -360,14 +368,18 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
     --text-on-bubble: rgba(255, 255, 255, 0.88);
     --meta-on-bubble: rgba(255, 255, 255, 0.85);
     --glass-bg: rgba(30, 30, 33, 0.96);
-    --bar-bg: #161618;
     --glass-stroke: rgba(255, 255, 255, 0.45);
     --fill: rgba(118, 118, 128, 0.42);
+    --control-bg: rgba(120, 120, 128, 0.45);
+    --control-ring: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
   }
   .btn, .chip, .field { border-color: rgba(255, 255, 255, 0.5); }
+  /* Bars without a surface get their separator back. */
+  .chat-head { border-bottom-color: var(--line); }
+  .messages-wrap::before, .messages-wrap::after, .pane-left::after { display: none; }
 }
 
-/* Reduce Transparency (Chromium only; Safari does not report it): solid bars. */
+/* Reduce Transparency (Chromium only; Safari does not report it): solid tab bar. */
 @media (prefers-reduced-transparency: reduce) {
-  :root { --glass-bg: #1e1e21; --bar-bg: #161618; }
+  :root { --glass-bg: #1e1e21; }
 }

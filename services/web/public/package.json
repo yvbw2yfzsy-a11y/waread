@@ -1,6 +1,6 @@
 {
   "name": "waread-frontend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "waread – schreibgeschützte WhatsApp-Leseoberfläche (Vanilla TypeScript, esbuild)",
   "type": "module",
