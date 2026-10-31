@@ -1,25 +1,21 @@
-# Profilbilder (Branch `feature/profilbilder`, nicht fertig)
+# Profilbilder (ab Version 0.2.0, ab Werk aus)
 
-Stand: 30. Oktober 2026. Gewissheitsstufen wie in `docs/VERSION2.md`.
+Stand: 31. Oktober 2026. Gewissheitsstufen wie in `docs/VERSION2.md`.
 
 ## 1. Stand
 
-Der Code steht in Ingest, Web-Dienst und Oberfläche. Seine Tests sind grün:
+Der Abruf ist in Ingest, Web-Dienst und Oberfläche eingebaut und ab Werk aus. Tests:
 - `services/ingest/test/avatars.test.ts`: 9 Prüfungen.
-- Web-Smoke: 7 neue Prüfungen, zusammen 324.
-- Browsertest `e2e-frontend-v2.mjs`: 2 neue Prüfungen, zusammen 54.
+- `waLib.test.ts`: Hülle, Fehlercodes und Download-Ziel.
+- Web-Smoke: 7 Prüfungen.
+- Browsertest `e2e-frontend-v2.mjs`: 2 Prüfungen.
 
-**Der Sende-Wächter (`npm run check:no-send`) schlägt absichtlich an**, und damit auch `npm run build` des Ingest (`prebuild`). Drei Prüfungen sind rot:
-
-- `kein verbotener Name im gesamten Quellcode`: `profilePictureUrl` steht in der Verbotsliste.
-- `die Huelle nutzt vom rohen Socket nur ev.on, ev.off und end`: die Hülle reicht jetzt `profilePicture` durch.
-- `waLib`-Test `die Huelle reicht NUR ev.on, ev.off und end durch`.
-
-Die Ausnahme im Wächter ist nicht eingebaut. Sie lockert den zentralen Sicherheitstest und braucht eine ausdrückliche Entscheidung. Vorgesehen ist:
-- `profilePictureUrl` nur in `waLib.ts` und nur als `raw.profilePictureUrl`.
-- `WaSocket` mit genau `ev`, `end` und `profilePicture`.
+**Sende-Wächter:** Er hat eine enge Ausnahme bekommen (Entscheidung des Nutzers vom 31.10.2026):
+- `profilePictureUrl` ist nur in `waLib.ts` erlaubt, und nur als `raw.profilePictureUrl` (`WALIB_ONLY_NAMES` in `services/ingest/test/support/scanForbidden.ts`).
+- `WaSocket` hat genau `ev`, `end` und `profilePicture`.
 - In jeder anderen Datei bleibt der Name verboten.
-- Gegentests für andere Abfragen (`fetchStatus`, `fetchBlocklist`).
+- Gegentests stellen sicher, dass andere Abfragen weiter anschlagen (`fetchStatus`, `fetchBlocklist`, `query`).
+- `npm run check:no-send` ist mit 34 Prüfungen grün.
 
 ## 2. Verhalten
 

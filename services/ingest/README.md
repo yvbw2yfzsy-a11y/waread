@@ -34,14 +34,14 @@ Node.js (≥ 22.12) + TypeScript, `better-sqlite3` (FTS5), Baileys, `sharp`, `ff
 
 **Leistet (im Code und per Test abgesichert):**
 
-1. **Enge Hülle.** Nur `src/waLib.ts` lädt die Bibliothek. Nach außen gibt es `WaSocket` mit genau `ev.on`, `ev.off` und `end`. Das rohe Socket-Objekt verlässt die Datei nie, Sende-, Lese- und Presence-Methoden sind für den übrigen Code nicht erreichbar.
+1. **Enge Hülle.** Nur `src/waLib.ts` lädt die Bibliothek. Nach außen gibt es `WaSocket` mit genau `ev.on`, `ev.off`, `end` und `profilePicture` (Profilbild-Abfrage, nur mit `profile_pictures = true` genutzt, siehe `src/avatars.ts` und `docs/PROFILBILDER.md`). Das rohe Socket-Objekt verlässt die Datei nie, Sende-, Lese- und Presence-Methoden sind für den übrigen Code nicht erreichbar.
 2. **Medien-Download** läuft über `downloadContentFromMessage` (HTTP-Abruf des verschlüsselten Blobs, lokale Entschlüsselung). Die Wiederhol-Anfrage an das Telefon (`updateMediaMessage`) ist bewusst **nicht** angebunden: abgelaufene Medien (HTTP 403/404/410) werden `expired`.
 3. **`test/no-send-calls.test.ts`** (läuft in `npm test` und als `prebuild` vor `npm run build`) zerlegt alle Quelldateien per TypeScript-AST und schlägt fehl bei:
    - jedem Bezeichner oder bezeichnerartigen String, dessen Wortbestandteile `read`, `presence` oder `send` sind (`readMessages`, `sendPresenceUpdate`, `sock['sendMessage']`, `read_receipt` …),
    - Namen auf einer Sperrliste ausgehender Aktionen ohne diese Wörter (`logout`, `chatModify`, `relayMessage`, `query`, `groupMetadata`, `requestPairingCode`, `updateMediaMessage` …),
-   - jeder Verwendung des rohen Sockets in `waLib.ts` außer `raw.ev.on`, `raw.ev.off`, `raw.end`,
+   - jeder Verwendung des rohen Sockets in `waLib.ts` außer `raw.ev.on`, `raw.ev.off`, `raw.end`, `raw.profilePictureUrl`,
    - dem Wort „baileys" in jeder anderen Datei als `waLib.ts`, sowie jedem dynamischen `import()`/`require()` außerhalb von `waLib.ts` außer `better-sqlite3`.
-   Der Wächter prüft sich selbst mit Negativtests. Einzige Ausnahme: `readFileSync` (Node-Dateizugriff). Jede Ergänzung der Ausnahmeliste (`test/support/scanForbidden.ts`) ist eine Sicherheitsentscheidung.
+   Der Wächter prüft sich selbst mit Negativtests. Ausnahmen: `readFileSync` (Node-Dateizugriff) und `profilePictureUrl`, nur in `waLib.ts` (`WALIB_ONLY_NAMES`, Entscheidung vom 31.10.2026). Jede Ergänzung der Ausnahmeliste (`test/support/scanForbidden.ts`) ist eine Sicherheitsentscheidung.
 4. Neu/angehört (`seen_at`, `played_at`) sind rein lokale Spalten; dieser Dienst setzt sie nie.
 
 **Leistet NICHT:**
