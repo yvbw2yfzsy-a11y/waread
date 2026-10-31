@@ -32,7 +32,7 @@ function setup(patch: (s: { connected: boolean; pics: Record<string, string | nu
     mediaDir: env.cfg.paths.mediaDir,
     log: env.log,
     isConnected: () => state.connected,
-    query: async (jid) => {
+    askPicture: async (jid) => {
       queries.push(jid)
       const v = state.pics[jid]
       if (v instanceof Error) throw v

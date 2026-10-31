@@ -50,7 +50,7 @@ export interface AvatarDeps {
   log: Logger
   isConnected(): boolean
   /** Profilbild-Adresse oder null (kein Bild / nicht sichtbar). Anfrage an WhatsApp. */
-  query(jid: string): Promise<string | null>
+  askPicture(jid: string): Promise<string | null>
   /** HTTPS-Abruf des Bildes. */
   download(url: string): Promise<Buffer>
   /** Verkleinert `src` nach `dest` (JPEG). */
@@ -131,7 +131,10 @@ export class AvatarSync {
     for (const u of updates as { id?: unknown; imgUrl?: unknown }[]) {
       if (typeof u?.id !== 'string' || !isAvatarCandidate(u.id)) continue
       if (u.imgUrl === 'removed') {
-        void this.removeAvatar(u.id).then((had) => { if (had) pushEvent(this.d.db, EVENT_AVATAR_UPDATED, { chatId: u.id }) })
+        const id = u.id
+        void this.removeAvatar(id)
+          .then((had) => { if (had) pushEvent(this.d.db, EVENT_AVATAR_UPDATED, { chatId: id }) })
+          .catch((err: unknown) => this.d.log.warn('avatar_remove_failed', errorFields(err)))
         checked[u.id] = this.now()
         dirty = true
       } else if (u.imgUrl === 'changed' && checked[u.id] !== undefined) {
@@ -144,7 +147,8 @@ export class AvatarSync {
 
   /** Arbeitet die Warteliste ab; ein laufender Durchgang wird geteilt (Tests koennen so das Ende abwarten). */
   work(): Promise<void> {
-    this.current ??= this.drain().finally(() => {
+    // Kein unbehandelter Fehler: Er wuerde den Prozess beenden (Node-Standard bei unhandled rejection).
+    this.current ??= this.drain().catch((err: unknown) => this.d.log.error('avatars_work_failed', errorFields(err))).finally(() => {
       this.current = null
       if (this.waiting.length > 0 && !this.stopped) void this.work()
     })
@@ -172,7 +176,7 @@ export class AvatarSync {
     const { db, log } = this.d
     this.lastQueryAt = Date.now()
     try {
-      const url = await this.d.query(chatId)
+      const url = await this.d.askPicture(chatId)
       const changed = url ? (await this.store(chatId, await this.d.download(url)), true) : await this.removeAvatar(chatId)
       const checked = this.loadChecked()
       checked[chatId] = this.now()

@@ -267,9 +267,17 @@ export async function loadWaLib(log: Logger, importer: ModuleImporter = defaultI
       if (!res.ok) throw new Error(`profile_picture_http_${res.status}`)
       const declared = Number(res.headers.get('content-length') ?? '0')
       if (declared > PROFILE_PICTURE_MAX_BYTES) throw new Error('profile_picture_too_large')
-      const buf = Buffer.from(await res.arrayBuffer())
-      if (buf.length > PROFILE_PICTURE_MAX_BYTES) throw new Error('profile_picture_too_large')
-      return buf
+      // Stueckweise lesen und bei Ueberschreitung abbrechen: ohne Content-Length landet sonst alles im Speicher.
+      const chunks: Buffer[] = []
+      let total = 0
+      if (res.body) {
+        for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          total += chunk.byteLength
+          if (total > PROFILE_PICTURE_MAX_BYTES) throw new Error('profile_picture_too_large')
+          chunks.push(Buffer.from(chunk))
+        }
+      }
+      return Buffer.concat(chunks)
     },
 
     async downloadMedia(target) {

@@ -16,7 +16,16 @@ function fakeModule() {
     readMessages: () => sockets.push(['readMessages']),
     sendPresenceUpdate: () => sockets.push(['sendPresenceUpdate']),
     logout: () => sockets.push(['logout']),
+    fetchStatus: () => sockets.push(['fetchStatus']),
     ws: {},
+    // Einzige durchgereichte Abfrage (Profilbild): Antwort je JID einstellbar, Fehler mit Boom-artigem data-Feld.
+    pictures: {} as Record<string, string | undefined | { code: number }>,
+    profilePictureUrl: async (jid: string, type: string, timeoutMs: number) => {
+      sockets.push(['profilePictureUrl', jid, type, timeoutMs])
+      const v = raw.pictures[jid]
+      if (v && typeof v === 'object') throw Object.assign(new Error('x'), { data: v.code })
+      return v
+    },
   }
   const mod = {
     makeWASocket: (cfg: any) => (configs.push(cfg), raw),
@@ -54,14 +63,14 @@ describe('waLib (Huelle um die Bibliothek, mit Fake-Modul)', () => {
     assert.deepEqual(cfg.auth.keys, { cached: auth.keys })
   })
 
-  it('die Huelle reicht NUR ev.on, ev.off und end durch', async () => {
+  it('die Huelle reicht NUR ev.on, ev.off, end und die Profilbild-Abfrage durch', async () => {
     const f = fakeModule()
     const { log } = memoryLogger()
     const lib = await loadWaLib(log, importerFor(f.mod))
     const sock: any = lib.createSocket({ auth: { creds: {}, keys: { get: () => ({}), set: () => {} } } })
-    assert.deepEqual(Object.keys(sock).sort(), ['end', 'ev'])
+    assert.deepEqual(Object.keys(sock).sort(), ['end', 'ev', 'profilePicture'])
     assert.deepEqual(Object.keys(sock.ev).sort(), ['off', 'on'])
-    for (const forbidden of ['sendMessage', 'readMessages', 'sendPresenceUpdate', 'logout', 'ws', 'query', 'chatModify']) {
+    for (const forbidden of ['sendMessage', 'readMessages', 'sendPresenceUpdate', 'logout', 'ws', 'query', 'chatModify', 'fetchStatus', 'profilePictureUrl']) {
       assert.equal(sock[forbidden], undefined, forbidden)
     }
     const h = () => {}
@@ -70,6 +79,30 @@ describe('waLib (Huelle um die Bibliothek, mit Fake-Modul)', () => {
     const err = new Error('x')
     sock.end(err)
     assert.deepEqual(f.sockets, [['on', 'messages.upsert', h], ['off', 'messages.upsert', h], ['end', err]])
+  })
+
+  it('profilePicture: grosses Bild, Zeitlimit; 401/404 -> null, andere Fehler (z. B. 429) werfen weiter', async () => {
+    const f = fakeModule()
+    const { log } = memoryLogger()
+    const lib = await loadWaLib(log, importerFor(f.mod))
+    const sock = lib.createSocket({ auth: { creds: {}, keys: { get: () => ({}), set: () => {} } } })
+    f.raw.pictures = { a: 'https://pps.whatsapp.net/a', b: undefined, c: { code: 401 }, d: { code: 404 }, e: { code: 429 } }
+    assert.equal(await sock.profilePicture('a'), 'https://pps.whatsapp.net/a')
+    assert.equal(await sock.profilePicture('b'), null)
+    assert.equal(await sock.profilePicture('c'), null)
+    assert.equal(await sock.profilePicture('d'), null)
+    await assert.rejects(sock.profilePicture('e'), (err: { data?: number }) => err.data === 429)
+    assert.deepEqual(f.sockets[0], ['profilePictureUrl', 'a', 'image', 20_000])
+    assert.ok(f.sockets.every((s) => s[0] === 'profilePictureUrl'), 'sonst nichts am rohen Socket')
+  })
+
+  it('downloadProfilePicture: nur https auf *.whatsapp.net', async () => {
+    const f = fakeModule()
+    const { log } = memoryLogger()
+    const lib = await loadWaLib(log, importerFor(f.mod))
+    for (const bad of ['http://pps.whatsapp.net/a', 'https://evil.example/a', 'https://pps.whatsapp.net:8443/a', 'https://u:p@pps.whatsapp.net/a']) {
+      await assert.rejects(lib.downloadProfilePicture(bad), (err: { code?: string }) => err.code === 'bad_target', bad)
+    }
   })
 
   it('downloadMedia: Schluessel/Pfad/Typ gehen an downloadContentFromMessage, sonst nichts', async () => {
