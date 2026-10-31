@@ -110,6 +110,8 @@ function startApp(): void {
       if (u.deletedMessages > 0 || u.deletedMedia > 0) { dataChanged(); void loadChats(); }
     },
     onHistorySynced: () => refreshChatsSoon(),
+    // New picture: the chat list carries a new avatarUrl (versioned), so reloading it is enough.
+    onAvatarUpdated: () => refreshChatsSoon(),
     onOpen: () => { setOnline(true); void refreshAll(); },
     onDown: () => {
       setOnline(false);

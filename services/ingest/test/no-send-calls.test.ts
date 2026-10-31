@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { ALLOWED_NAMES, checkShell, FORBIDDEN_NAMES, listSourceFiles, scanSource, scanTree, words } from './support/scanForbidden.js'
+import { ALLOWED_NAMES, checkShell, FORBIDDEN_NAMES, listSourceFiles, scanSource, scanTree, WALIB_ONLY_NAMES, words } from './support/scanForbidden.js'
 
 /**
  * KRITISCHER SICHERHEITSTEST.
@@ -12,6 +12,10 @@ import { ALLOWED_NAMES, checkShell, FORBIDDEN_NAMES, listSourceFiles, scanSource
  * Status, keine Nachricht. Dieser Test scannt den gesamten Quellcode (src/) per AST und schlaegt fehl,
  * sobald ein Bezeichner oder bezeichnerartiger String eines der Woerter "read", "presence" oder "send"
  * enthaelt oder einem verbotenen Namen entspricht. Er laeuft in `npm test` und vor `npm run build` (prebuild).
+ *
+ * Einzige Ausnahme: die Profilbild-Abfrage (profilePictureUrl), nur in waLib.ts, nur am rohen Socket, genutzt von
+ * avatars.ts und dort nur mit profile_pictures = true (ab Werk aus). Sie sendet eine Abfrage (iq), keine Nachricht,
+ * keine Quittung, keine Presence. Die Tests unten pruefen, dass die Ausnahme nicht weiter reicht.
  *
  * Grenzen (ehrlich): Der Test ist eine statische Namenspruefung plus Strukturpruefung der Huelle. Er kann
  * NICHT beweisen, was die Bibliothek (Baileys) intern selbst sendet - siehe README, Abschnitt
@@ -35,7 +39,7 @@ describe('no-send-calls: Quellcode', () => {
     assert.deepEqual(findings, [], `Verbotene Aufrufe/Namen gefunden:\n${text}`)
   })
 
-  it('die Huelle nutzt vom rohen Socket nur ev.on, ev.off und end', () => {
+  it('die Huelle nutzt vom rohen Socket nur ev.on, ev.off, end und profilePictureUrl', () => {
     const src = fs.readFileSync(path.join(srcDir, 'waLib.ts'), 'utf8')
     assert.deepEqual(checkShell(src), [])
   })
@@ -113,6 +117,27 @@ describe('no-send-calls: der Waechter selbst (Negativtests)', () => {
 
   it('Erlaubnisliste ist minimal und enthaelt nur lokale Dateisystem-Namen', () => {
     assert.deepEqual([...ALLOWED_NAMES].sort(), ['readFileSync'])
+  })
+
+  it('Ausnahme nur fuer waLib.ts: genau profilePictureUrl; anderswo bleibt der Name verboten', () => {
+    assert.deepEqual([...WALIB_ONLY_NAMES], ['profilePictureUrl'])
+    assert.ok(FORBIDDEN_NAMES.has('profilePictureUrl'))
+    assert.ok(scanSource('avatars.ts', `sock.profilePictureUrl(jid)`).length > 0)
+    assert.ok(scanSource('waLib.ts', `raw.fetchStatus(jid)`).length > 0)
+  })
+
+  it('Huelle: Profilbild-Abfrage ja, andere Abfragen am rohen Socket nein', () => {
+    const ok = `
+      interface WaSocket { readonly ev: any; end(): void; profilePicture(j: string): Promise<string | null> }
+      const raw = make()
+      const shell = { ev: { on: (e, h) => raw.ev.on(e, h) }, end: () => raw.end(), profilePicture: (j) => raw.profilePictureUrl(j) }
+    `
+    assert.deepEqual(checkShell(ok), [])
+    const more = `const raw = make(); const shell = { status: (j) => raw.fetchStatus(j), block: () => raw.fetchBlocklist(), q: (n) => raw.query(n) }`
+    const problems = checkShell(more)
+    for (const name of ['raw.fetchStatus', 'raw.fetchBlocklist', 'raw.query']) assert.ok(problems.some((p) => p.includes(name)), name)
+    const extra = `interface WaSocket { readonly ev: any; end(): void; profilePicture(j: string): Promise<string | null>; status(): void }`
+    assert.ok(checkShell(extra).some((p) => p.includes('WaSocket')))
   })
 
   it('Verbotsliste enthaelt die kritischen Namen', () => {

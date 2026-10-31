@@ -127,6 +127,15 @@ Für Medien ohne Text ist `lastMessagePreview` `null`; das Frontend zeigt dann e
 
 ### `GET api/chats/:id/avatar` **[Ergänzung]**
 Profilbild (Bild-MIME, `Cache-Control: private, max-age=3600`). `404`, wenn keines vorhanden ist.
+Die Chatliste liefert dazu `avatarUrl` mit dem Parameter `v` (Dateiname des Bildes). Er ändert sich mit jedem neuen Bild,
+damit der Browser kein altes aus dem Zwischenspeicher zeigt.
+
+### `POST api/chats/:id/avatar/refresh` **[Ergänzung, Profilbilder]**
+Die Oberfläche ruft das beim Öffnen eines Chats auf. Der Web-Dienst spricht nie selbst mit WhatsApp: Er legt nur den Befehl
+`refresh_avatar` (`{ "chatId": … }`) in `ingest_commands` ab, und nur, wenn der Ingest den Abruf eingeschaltet hat
+(`settings` `avatars.enabled = "1"`, siehe `profile_pictures` in der Konfiguration). Für einen Chat wartet höchstens ein Befehl.
+Ob das Bild fällig ist, entscheidet der Ingest. `202 {"ok":true,"queued":true}` oder, ausgeschaltet,
+`200 {"ok":true,"queued":false}`; `404`, wenn der Chat unbekannt ist.
 
 ### `GET api/chats/:id/messages?before=<waTimestamp>&beforeId=<messageId>&limit=50`
 `200 Message[]`, **aufsteigend sortiert** (älteste zuerst). Ohne `before` die neuesten `limit` Nachrichten; mit `before`
@@ -299,6 +308,7 @@ Höchstens 16 gleichzeitige Verbindungen (`503 too_many_clients`).
 | `media_ready` | `{ "messageId", "chatId", "status", "skipReason", "loadable", "thumbnailPath"?: "api/media/<id>?thumb=1", "filePath"?: "api/media/<id>" }` – **[Präzisierung]** statt Dateisystempfaden relative API-Pfade; `thumbnailPath` nur falls vorhanden, `filePath` nur bei `status: "ready"`; `skipReason`/`loadable` ändern sich auch ohne neue Datei (z. B. nach „Medium jetzt laden") |
 | `connection_status` | `{ "state": "connected"\|"connecting"\|"disconnected"\|"needs_qr", "since"?: number }` |
 | `history_synced` | `{ "stored": number }` – **[Ergänzung]** einmal je Verlaufspaket nach dem Koppeln; Chatliste neu laden (der Verlauf erzeugt keine einzelnen `new_message`) |
+| `avatar_updated` | `{ "chatId": string }` – **[Ergänzung, Profilbilder]** ein Profilbild ist neu oder entfernt; Chatliste neu laden |
 | `cleanup_done` | `{ "deletedMessages": number, "deletedMedia": number }` – Chatliste und offene Ansicht neu laden |
 
 Hinweise: `seen` für viele Nachrichten erzeugt viele einzelne `message_updated`-Ereignisse. Ereignisse für Nachrichten, die inzwischen

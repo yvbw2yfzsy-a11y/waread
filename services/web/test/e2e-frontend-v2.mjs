@@ -267,6 +267,18 @@ let anna;
   await page.locator('.chat-head .mute').click();
   await settle(page, 400);
   ok('Stumm wieder aus', !dbq("SELECT value FROM settings WHERE key = 'chat.muted'")[0].value.includes('4915111222333'));
+
+  // Profilbild: Oeffnen eines Chats legt (nur bei eingeschaltetem Abruf) einen Befehl fuer den Ingest ab, sonst nichts.
+  const avatarCmds = () => dbq("SELECT payload_json AS p FROM ingest_commands WHERE type = 'refresh_avatar'").map((x) => JSON.parse(x.p).chatId);
+  ok('Profilbild aus: Oeffnen legt keinen Befehl ab', avatarCmds().length === 0, avatarCmds());
+  client.setSetting(db, 'avatars.enabled', '1');
+  await page.evaluate((id) => { location.hash = '#/chats/' + encodeURIComponent(id); }, '4915222000111@s.whatsapp.net');
+  await page.waitForSelector('.msg-row[data-id="b1"]');
+  await settle(page, 500);
+  ok('Profilbild an: Oeffnen legt genau einen Befehl fuer diesen Chat ab', avatarCmds().join() === '4915222000111@s.whatsapp.net', avatarCmds());
+  client.setSetting(db, 'avatars.enabled', '0');
+  await page.evaluate((id) => { location.hash = '#/chats/' + encodeURIComponent(id); }, A);
+  await page.waitForSelector('.msg-row');
 }
 
 // ---- Einstellungen und Loeschwege ----
