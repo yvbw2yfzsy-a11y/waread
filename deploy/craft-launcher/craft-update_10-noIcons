@@ -1,0 +1,543 @@
+#!/usr/bin/env bash
+# Lädt die Web-Builds der Craft Apps (github.com/storytold/<app>), prüft SHA-256
+# und schaltet neue Versionen atomar per Symlink frei.
+# Erzeugt danach die Startseite (Pi-Launcher) unter $WEBROOT/index.html neu.
+# Lokale Apps (LOCAL_APPS, derzeit waread) installiert und aktualisiert dieses Skript NICHT. Sie haben eine
+# eigene Installation in eigenen Verzeichnissen. Die Startseite verlinkt sie nur und liest dafür lediglich
+# ihren Installationszustand.
+set -uo pipefail
+WEBROOT=/var/www/craft
+STATE=${STATE_DIRECTORY:-/var/lib/craft}
+REL=$STATE/releases
+WORK=$STATE/work
+VERS=$STATE/versions
+KEEP=2   # so viele Versionen pro App bleiben für ein Rollback liegen
+APPS=(
+  "photocraft|PhotoCraft|Bildbearbeitung"
+  "vectorcraft|VectorCraft|Vektorgrafik"
+  "filmcraft|FilmCraft|Videoschnitt"
+  "lightcraft|LightCraft|RAW-Fotos"
+  "pdfcraft|PdfCraft|PDF"
+  "effectcraft|EffectCraft|Motion Graphics"
+  "designcraft|DesignCraft|Seitenlayout"
+  "wordcraft|WordCraft|Textverarbeitung"
+  "deckcraft|DeckCraft|Präsentationen"
+  "gridcraft|GridCraft|Tabellen"
+  "cadcraft|CADCraft|CAD"
+  "soundcraft|SoundCraft|Audio"
+  "figcraft|FigCraft|UI-Design"
+)
+# Lokale Apps: NICHT von craft-update geladen, installiert oder aktualisiert, nur auf der Startseite verlinkt.
+# Die Karte erscheint nur, wenn local_probe die App findet. Format wie APPS (slug|Name|Beschreibung).
+# Neue lokale App: hier eintragen, in local_probe die Prüfung ergänzen, Icon (ICON_B64) und Akzentfarbe (ACCENT) setzen.
+LOCAL_APPS=(
+  "waread|waread|WhatsApp lesen"
+)
+ALL_APPS=("${APPS[@]}" "${LOCAL_APPS[@]}")   # nur für die Startseite; heruntergeladen wird ausschließlich aus APPS
+# waread: eigene Installation (deploy/install.sh von waread) unter /opt/waread. Hier wird dort nur gelesen.
+WAREAD_HOME=/opt/waread
+# Ziel der waread-Karte. Standard: Pfad auf diesem Host (Nginx-Snippet von waread, deploy/craft-launcher/README.md).
+# Eigener Hostname (z. B. für Passkeys): die ganze URL eintragen, z. B. https://waread.heimnetz.example/
+WAREAD_URL=./waread/
+# Prüft eine lokale App, nur lesend. Rückgabe 0 = installiert.
+# Setzt LOCAL_VER (Version mit "v", leer = unbekannt) und LOCAL_HREF (Ziel der Karte).
+local_probe() {
+  local cur tgt
+  LOCAL_VER=''
+  LOCAL_HREF="./$1/"
+  case $1 in
+    waread)
+      # install.sh und waread-update halten /opt/waread/current als Symlink auf releases/<X.Y.Z>.
+      cur=$WAREAD_HOME/current
+      [[ -L $cur && -f $cur/services/web/dist/server.js ]] || return 1
+      LOCAL_HREF=$WAREAD_URL
+      tgt=$(readlink -f -- "$cur" 2>/dev/null) || return 0
+      tgt=${tgt##*/}
+      [[ $tgt =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && LOCAL_VER="v$tgt"
+      return 0 ;;
+  esac
+  return 1
+}
+CURL=(curl --fail --silent --show-error --location --proto '=https' --tlsv1.2
+      --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 900)
+mkdir -p "$REL" "$WORK" "$WEBROOT"
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "Update läuft bereits."; exit 0; }
+touch "$VERS"
+find "$WORK" -mindepth 1 -delete
+latest_tag() {
+  local url tag
+  url=$(curl --fail --silent --show-error --location --head --proto '=https' \
+        --retry 3 --connect-timeout 15 --output /dev/null \
+        --write-out '%{url_effective}' \
+        "https://github.com/storytold/$1/releases/latest") || return 1
+  tag=${url##*/}
+  [[ $tag =~ ^v[0-9][0-9A-Za-z._-]*$ ]] || return 1
+  printf '%s' "$tag"
+}
+install_app() {
+  local slug=$1 tag=$2 ver=${2#v}
+  local asset="${slug}-web-${ver}.zip"
+  local base="https://github.com/storytold/${slug}/releases/download/${tag}"
+  local dir="$WORK/$slug" target="$REL/${slug}-${tag}" src sum
+  mkdir -p "$dir/x" || return 1
+  "${CURL[@]}" -o "$dir/$asset" "$base/$asset" \
+    || { echo "  Download fehlgeschlagen: $asset"; return 1; }
+  "${CURL[@]}" -o "$dir/SHA256SUMS.txt" "$base/SHA256SUMS.txt" \
+    || { echo "  SHA256SUMS.txt nicht gefunden"; return 1; }
+  sum=$(awk -v f="$asset" '{n=$2; sub(/^\*/,"",n)} n==f {print $1; exit}' "$dir/SHA256SUMS.txt")
+  [[ -n $sum ]] || { echo "  Keine Prüfsumme für $asset"; return 1; }
+  echo "$sum  $dir/$asset" | sha256sum -c --quiet - \
+    || { echo "  Prüfsumme stimmt NICHT, Abbruch"; return 1; }
+  unzip -q "$dir/$asset" -d "$dir/x" || { echo "  Entpacken fehlgeschlagen"; return 1; }
+  src=$(find "$dir/x" -mindepth 1 -maxdepth 1 -type d -name "${slug}-web-*" -print -quit)
+  [[ -n $src && -f $src/index.html ]] || { echo "  Unerwartete Zip-Struktur"; return 1; }
+  rm -rf "$target"
+  mv "$src" "$target" || return 1
+  chmod -R a+rX,go-w "$target"
+  touch "$target"
+  # Atomar umschalten: Symlink neu setzen und über den alten rübermoven
+  ln -sfn "$target" "$WEBROOT/.${slug}.new" \
+    && mv -T "$WEBROOT/.${slug}.new" "$WEBROOT/$slug" || return 1
+  { grep -v "^${slug}=" "$VERS" || true; echo "${slug}=${tag}"; } > "$VERS.new" \
+    && mv "$VERS.new" "$VERS"
+  # Alte Versionen aufräumen (die neueste bleibt immer)
+  ls -1dt "$REL/${slug}"-v* 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -rf --
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Startseite (Pi-Launcher)
+# ---------------------------------------------------------------------------
+# Neue App: oben in APPS eintragen und hier einer Kategorie zuordnen (CATEGORY).
+# Apps ohne Zuordnung erscheinen automatisch unter "Weitere".
+declare -A CATEGORY=(
+  [photocraft]=kreativ [vectorcraft]=kreativ [lightcraft]=kreativ
+  [designcraft]=kreativ [figcraft]=kreativ
+  [filmcraft]=medien [effectcraft]=medien [soundcraft]=medien
+  [pdfcraft]=office [wordcraft]=office [deckcraft]=office [gridcraft]=office
+  [cadcraft]=technik
+)
+CAT_ORDER=(kreativ medien office technik weitere)
+declare -A CAT_TITLE=(
+  [kreativ]="Kreativ" [medien]="Video & Audio" [office]="Office"
+  [technik]="Technik" [weitere]="Weitere"
+)
+declare -A CAT_SUB=(
+  [kreativ]="Foto, Grafik & Layout" [medien]="Schnitt, Effekte & Ton"
+  [office]="Texte, Tabellen & Präsentationen" [technik]="Konstruktion"
+  [weitere]="Weitere Apps"
+)
+declare -A CAT_GLYPH=(
+  [kreativ]="M12 3a9 9 0 100 18c1.7 0 2.2-1 1.7-2.2-.5-1.2.2-2.3 1.5-2.3H18a3 3 0 003-3c0-5-4-10.5-9-10.5z M7.5 11.5h.01 M10 7.5h.01 M15 7.5h.01"
+  [medien]="M8 5.5v13l11-6.5z"
+  [office]="M7 3h7l5 5v13H7z M14 3v5h5 M10 13h6 M10 17h6"
+  [technik]="M12 2.5l8.5 4.8v9.4L12 21.5l-8.5-4.8V7.3z M12 12l8.5-4.7 M12 12v9.5 M12 12L3.5 7.3"
+  [weitere]="M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z"
+)
+# Farben der Kategorie-Banner und Hintergrundzonen (RGB, Verlauf von 1 nach 2)
+declare -A CAT_C1=([kreativ]="147 51 234" [medien]="190 30 60"  [office]="30 80 220" [technik]="15 118 110" [weitere]="71 85 105")
+declare -A CAT_C2=([kreativ]="236 72 153" [medien]="234 88 12"  [office]="8 145 200" [technik]="22 163 74"  [weitere]="100 116 139")
+# Illustrationen der Banner: eigene Inline-SVGs (weiße Linien/Flächen), keine externen Bilder.
+# Die wichtigsten Motive liegen rechts, damit sie auch auf dem Handy sichtbar bleiben.
+ART_HEAD='<svg class="art" viewBox="0 0 760 140" preserveAspectRatio="xMaxYMid slice" aria-hidden="true" focusable="false"><g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5">'
+ART_TAIL='</g></svg>'
+declare -A CAT_ART=(
+  # Kreativ: Farbkleckse, Pinselstrich, Bézierkurve mit Ankerpunkten, Funkeln, Farbfelder, Bildrahmen
+  [kreativ]="${ART_HEAD}"'<circle cx="650" cy="72" r="54" fill="#fff" fill-opacity=".14" stroke="none"/><circle cx="706" cy="36" r="30" fill="#fff" fill-opacity=".2" stroke="none"/><circle cx="604" cy="116" r="24" fill="#fff" fill-opacity=".18" stroke="none"/><path d="M430 106C490 34 560 132 622 72S700 30 748 62" stroke-opacity=".28" stroke-width="16"/><path d="M420 112C470 18 540 18 590 78S690 122 740 36"/><path d="M590 78L630 52M590 78L552 104" stroke-opacity=".6" stroke-width="1.5"/><circle cx="630" cy="52" r="4.5" stroke-width="2"/><circle cx="552" cy="104" r="4.5" stroke-width="2"/><rect x="415" y="107" width="10" height="10" rx="2" fill="#fff" stroke="none"/><rect x="585" y="73" width="10" height="10" rx="2" fill="#fff" stroke="none"/><rect x="735" y="31" width="10" height="10" rx="2" fill="#fff" stroke="none"/><path d="M520 16l4.5 11 11 4.5-11 4.5-4.5 11-4.5-11-11-4.5 11-4.5z" fill="#fff" stroke="none"/><circle cx="256" cy="72" r="11" fill="#fff" fill-opacity=".28" stroke="none"/><circle cx="288" cy="72" r="11" fill="#fff" fill-opacity=".45" stroke="none"/><circle cx="320" cy="72" r="11" fill="#fff" fill-opacity=".7" stroke="none"/><rect x="352" y="42" width="64" height="52" rx="8" stroke-opacity=".55"/><path d="M360 86l16-18 12 12 10-9 14 15" stroke-opacity=".55"/>'"${ART_TAIL}"
+  # Video & Audio: Filmstreifen mit Play-Symbol, Wellenform, Schallplatte
+  [medien]="${ART_HEAD}"'<g transform="translate(560 72) rotate(-9)"><rect x="-132" y="-40" width="264" height="80" rx="11" fill="#fff" fill-opacity=".14" stroke-opacity=".8"/><path d="M-118-31H118M-118 31H118" stroke-width="8" stroke-dasharray="12 12" stroke-linecap="butt" stroke-opacity=".7"/><rect x="-104" y="-17" width="62" height="34" rx="4" fill="#fff" fill-opacity=".12" stroke-opacity=".55" stroke-width="1.5"/><rect x="-31" y="-17" width="62" height="34" rx="4" fill="#fff" fill-opacity=".12" stroke-opacity=".55" stroke-width="1.5"/><rect x="42" y="-17" width="62" height="34" rx="4" fill="#fff" fill-opacity=".12" stroke-opacity=".55" stroke-width="1.5"/><path d="M-5-9L11 0-5 9z" fill="#fff" stroke="none"/></g><path d="M690 58v28M706 44v56M722 28v84M738 46v48M754 60v24" stroke-width="5"/><circle cx="312" cy="70" r="36" stroke-opacity=".5"/><circle cx="312" cy="70" r="24" stroke-opacity=".3" stroke-width="1.5"/><circle cx="312" cy="70" r="9" fill="#fff" fill-opacity=".5" stroke="none"/><path d="M372 62v16M384 52v36M396 44v52M408 56v28" stroke-opacity=".4" stroke-width="4"/>'"${ART_TAIL}"
+  # Office: Dokument mit Textzeilen, Tabelle, Stift, Folie
+  [office]="${ART_HEAD}"'<rect transform="rotate(9 696 72)" x="646" y="20" width="98" height="104" rx="10" fill="#fff" fill-opacity=".1" stroke-opacity=".4"/><rect x="556" y="14" width="124" height="112" rx="12" fill="#fff" fill-opacity=".18" stroke-opacity=".85"/><rect x="574" y="32" width="52" height="8" rx="4" fill="#fff" stroke="none"/><path d="M574 56h88M574 70h88M574 84h64M574 98h76" stroke-opacity=".6" stroke-width="4"/><rect x="400" y="34" width="130" height="82" rx="9" fill="#fff" fill-opacity=".12" stroke-opacity=".7"/><rect x="400" y="34" width="130" height="26" rx="9" fill="#fff" fill-opacity=".2" stroke="none"/><path d="M400 61h130M400 88h130M443 34v82M487 34v82" stroke-opacity=".6" stroke-width="1.8"/><g transform="translate(700 110) rotate(35)"><rect x="-6" y="-64" width="12" height="54" rx="2.5" fill="#fff" stroke="none"/><path d="M-6-8L0 12 6-8z" fill="#fff" fill-opacity=".6" stroke="none"/></g><rect x="300" y="46" width="64" height="48" rx="6" stroke-opacity=".5"/><path d="M312 80l14-10 12 7 14-12" stroke-opacity=".5"/>'"${ART_TAIL}"
+  # Technik: Konstruktionsraster, isometrischer Würfel, CAD-Kreis mit Fadenkreuz, Bemaßung
+  [technik]="${ART_HEAD}"'<path d="M380 24H760M380 54H760M380 84H760M380 114H760M420 0V140M480 0V140M540 0V140M600 0V140M660 0V140M720 0V140" stroke-opacity=".12" stroke-width="1.5"/><path d="M620 14L668 41 620 68 572 41z" fill="#fff" fill-opacity=".3"/><path d="M572 41L620 68V124L572 97z" fill="#fff" fill-opacity=".12"/><path d="M668 41L620 68V124L668 97z" fill="#fff" fill-opacity=".2"/><circle cx="480" cy="76" r="34" stroke-dasharray="6 6" stroke-opacity=".8"/><circle cx="480" cy="76" r="12" stroke-opacity=".8"/><path d="M436 76h88M480 32v88" stroke-opacity=".45" stroke-width="1.5"/><path d="M696 30h50M696 22v16M746 22v16" stroke-opacity=".8"/><path d="M696 112l50-34" stroke-opacity=".45" stroke-dasharray="3 5"/>'"${ART_TAIL}"
+  # Weitere: abgerundete Kacheln
+  [weitere]="${ART_HEAD}"'<rect x="560" y="22" width="76" height="76" rx="18" fill="#fff" fill-opacity=".16" stroke-opacity=".6"/><rect x="650" y="40" width="76" height="76" rx="18" fill="#fff" fill-opacity=".1" stroke-opacity=".4"/><path d="M598 46v28M584 60h28" stroke-width="3"/>'"${ART_TAIL}"
+)
+# SCENES-BEGIN
+# Blasse Hintergrundszenen je Kategorie (eigene Inline-SVGs, Farbe/Unschärfe steuert das CSS).
+declare -A CAT_SCENE=(
+  [kreativ]='<svg class="sc s1" viewBox="0 0 460 420" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M300 244L258 412M300 244L342 412M300 244V412" stroke-opacity=".55" stroke-width="5"/><rect x="206" y="48" width="190" height="196" rx="8" fill="currentColor" fill-opacity=".1"/><path d="M200 256H402" stroke-width="7" stroke-opacity=".7"/><circle cx="262" cy="104" r="22" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M208 226C244 180 278 210 314 182S372 182 394 160V240H208Z" fill="currentColor" fill-opacity=".3" stroke="none"/><path d="M226 152C260 126 292 152 330 126" stroke-width="6" stroke-opacity=".8"/><circle cx="116" cy="120" r="27" fill="currentColor" fill-opacity=".5" stroke="none"/><path d="M86 172Q116 152 150 170L162 304H72Z" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M92 304V404M142 304V404" stroke-width="24" stroke-opacity=".42"/><path d="M148 180L212 146" stroke-width="16" stroke-opacity=".5"/><path d="M212 146L250 120" stroke-width="4"/><circle cx="254" cy="118" r="6" fill="currentColor" stroke="none"/><path d="M88 182L66 238" stroke-width="16" stroke-opacity=".5"/><ellipse cx="58" cy="254" rx="38" ry="25" fill="currentColor" fill-opacity=".3" stroke-opacity=".8"/><circle cx="42" cy="248" r="6" fill="currentColor" stroke="none"/><circle cx="62" cy="240" r="6" fill="currentColor" stroke="none"/><circle cx="76" cy="258" r="6" fill="currentColor" stroke="none"/><circle cx="424" cy="64" r="12" fill="currentColor" fill-opacity=".4" stroke="none"/><circle cx="446" cy="104" r="7" fill="currentColor" fill-opacity=".4" stroke="none"/><circle cx="30" cy="70" r="9" fill="currentColor" fill-opacity=".35" stroke="none"/></g></svg><svg class="sc s2" viewBox="0 0 380 430" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M190 340L128 424M190 340L252 424M190 340V424" stroke-opacity=".55" stroke-width="5"/><rect x="66" y="28" width="248" height="312" rx="10" fill="currentColor" fill-opacity=".1"/><circle cx="190" cy="150" r="104" fill="currentColor" fill-opacity=".1" stroke="none"/><circle cx="190" cy="136" r="46" fill="currentColor" fill-opacity=".42" stroke="none"/><path d="M98 332C102 252 148 214 190 214S278 252 282 332Z" fill="currentColor" fill-opacity=".34" stroke="none"/><path d="M190 66V210M122 140H258" stroke-dasharray="5 7" stroke-opacity=".6" stroke-width="2"/><path d="M150 112C166 98 214 98 230 112" stroke-opacity=".5" stroke-width="4"/><path d="M326 18L254 112" stroke-width="12" stroke-opacity=".7"/><path d="M254 112l-9 12" stroke-width="5"/><circle cx="243" cy="127" r="7" fill="currentColor" stroke="none"/><path d="M300 150C322 160 330 190 316 214" stroke-opacity=".5" stroke-width="2.5" stroke-dasharray="3 7"/></g></svg><svg class="sc s3" viewBox="0 0 440 320" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M72 160C72 86 144 40 226 44C318 48 374 98 358 162C348 200 306 192 288 216C270 244 292 276 240 282C140 294 72 236 72 160Z" fill="currentColor" fill-opacity=".16"/><circle cx="150" cy="204" r="17"/><circle cx="146" cy="104" r="19" fill="currentColor" fill-opacity=".6" stroke="none"/><circle cx="208" cy="82" r="19" fill="currentColor" fill-opacity=".45" stroke="none"/><circle cx="274" cy="98" r="19" fill="currentColor" fill-opacity=".6" stroke="none"/><circle cx="322" cy="144" r="17" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M296 262L420 150" stroke-width="11" stroke-opacity=".7"/><path d="M296 262l-18 18" stroke-width="13" stroke-opacity=".5"/><path d="M14 296C60 262 112 316 176 284" stroke-width="16" stroke-opacity=".28"/><path d="M30 20L96 60" stroke-width="3" stroke-opacity=".5"/><path d="M40 38l12 -4" stroke-width="6" stroke-opacity=".6"/></g></svg>'
+  [medien]='<svg class="sc s1" viewBox="0 0 460 420" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="150" cy="118" r="30" fill="currentColor" fill-opacity=".5" stroke="none"/><path d="M114 122C108 50 192 50 186 122" stroke-width="9" stroke-opacity=".8"/><rect x="100" y="106" width="18" height="40" rx="8" fill="currentColor" stroke="none" fill-opacity=".7"/><rect x="182" y="106" width="18" height="40" rx="8" fill="currentColor" stroke="none" fill-opacity=".7"/><path d="M96 196Q150 168 206 196L222 312H82Z" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M112 204L96 304M196 204L214 304" stroke-width="16" stroke-opacity=".4"/><rect x="30" y="300" width="400" height="96" rx="16" fill="currentColor" fill-opacity=".18"/><path d="M62 322V372M100 322V372M138 322V372M176 322V372M214 322V372M252 322V372" stroke-opacity=".6" stroke-width="2.5"/><rect x="55" y="338" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><rect x="93" y="350" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><rect x="131" y="332" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><rect x="169" y="358" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><rect x="207" y="342" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><rect x="245" y="336" width="14" height="9" rx="2" fill="currentColor" stroke="none"/><circle cx="300" cy="334" r="11"/><circle cx="342" cy="334" r="11"/><circle cx="384" cy="334" r="11"/><circle cx="300" cy="370" r="11" stroke-opacity=".6"/><circle cx="342" cy="370" r="11" stroke-opacity=".6"/><rect x="266" y="120" width="164" height="112" rx="10" fill="currentColor" fill-opacity=".12"/><path d="M282 176h14l8-34 12 62 10-46 8 26 10-12 12 30 10-48 10 34 12-18h14" stroke-width="3.5" stroke-opacity=".85"/><path d="M348 232v26M320 262h56" stroke-opacity=".6"/></g></svg><svg class="sc s2" viewBox="0 0 400 430" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="150" cy="82" r="38" fill="currentColor" fill-opacity=".14"/><circle cx="150" cy="82" r="9" fill="currentColor" stroke="none" fill-opacity=".6"/><circle cx="232" cy="82" r="38" fill="currentColor" fill-opacity=".14"/><circle cx="232" cy="82" r="9" fill="currentColor" stroke="none" fill-opacity=".6"/><rect x="104" y="120" width="190" height="96" rx="14" fill="currentColor" fill-opacity=".3"/><rect x="294" y="136" width="52" height="64" rx="8" fill="currentColor" fill-opacity=".22"/><circle cx="320" cy="168" r="17" fill="currentColor" fill-opacity=".4"/><rect x="116" y="132" width="52" height="28" rx="5" fill="currentColor" fill-opacity=".2" stroke-opacity=".5"/><circle cx="268" cy="140" r="6" fill="currentColor" stroke="none" fill-opacity=".8"/><path d="M170 216h62v16h-62z" fill="currentColor" fill-opacity=".5"/><path d="M200 232L120 418M200 232L280 418M200 232V420" stroke-width="5" stroke-opacity=".6"/><g transform="rotate(-9 330 330)"><rect x="264" y="300" width="132" height="92" rx="9" fill="currentColor" fill-opacity=".18"/><path d="M264 330H396" stroke-opacity=".7"/><path d="M274 290L318 268" stroke-width="22" stroke-dasharray="14 10" stroke-linecap="butt" stroke-opacity=".6"/><path d="M286 352h66M286 368h44" stroke-opacity=".6"/></g></g></svg><svg class="sc s3" viewBox="0 0 470 310" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="150" cy="150" r="104" fill="currentColor" fill-opacity=".1"/><circle cx="150" cy="150" r="14" fill="currentColor" fill-opacity=".6" stroke="none"/><circle cx="150" cy="95" r="22"/><circle cx="205" cy="132" r="22"/><circle cx="184" cy="196" r="22"/><circle cx="116" cy="196" r="22"/><circle cx="95" cy="132" r="22"/><path d="M232 250C290 300 340 280 420 292" stroke-width="30" stroke-opacity=".22" stroke-linecap="butt"/><path d="M232 250C290 300 340 280 420 292" stroke-width="3" stroke-dasharray="2 10" stroke-opacity=".6"/><path d="M300 40v60M318 24v92M336 52v44M354 36v76M372 60v36M390 44v68M408 66v24" stroke-width="6" stroke-opacity=".6"/><circle cx="428" cy="214" r="30" fill="currentColor" fill-opacity=".14"/><path d="M420 200l24 14-24 14z" fill="currentColor" stroke="none" fill-opacity=".7"/></g></svg>'
+  [office]='<svg class="sc s1" viewBox="0 0 460 420" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M14 306H446" stroke-width="12" stroke-opacity=".5"/><path d="M60 312V412M400 312V412" stroke-width="8" stroke-opacity=".4"/><circle cx="146" cy="108" r="29" fill="currentColor" fill-opacity=".5" stroke="none"/><path d="M118 148Q176 140 180 196L174 296H100Z" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M164 182L236 266" stroke-width="16" stroke-opacity=".5"/><path d="M92 160C60 180 60 250 96 300" stroke-opacity=".5" stroke-width="5"/><rect x="212" y="274" width="188" height="12" rx="6" fill="currentColor" fill-opacity=".5" stroke="none"/><rect x="250" y="162" width="152" height="112" rx="9" fill="currentColor" fill-opacity=".14"/><path d="M268 188h70M268 206h108M268 224h92M268 242h56" stroke-opacity=".6"/><path d="M60 262h40v44H60z" fill="currentColor" fill-opacity=".3"/><path d="M100 274c18 0 18 24 0 24" /><path d="M72 250c-8-12 8-16 0-30M88 250c-8-12 8-16 0-30" stroke-opacity=".5" stroke-width="2.5"/><rect x="306" y="40" width="96" height="84" rx="8" fill="currentColor" fill-opacity=".12" transform="rotate(8 354 82)"/><path d="M322 66h52M322 82h60M322 98h38" stroke-opacity=".5" transform="rotate(8 354 82)"/></g></svg><svg class="sc s2" viewBox="0 0 480 430" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M24 416H466" stroke-width="6" stroke-opacity=".5"/><rect x="176" y="34" width="286" height="200" rx="12" fill="currentColor" fill-opacity=".1"/><path d="M200 66h96" stroke-width="6" stroke-opacity=".7"/><path d="M200 86h58" stroke-opacity=".5"/><rect x="210" y="170" width="28" height="42" rx="3" fill="currentColor" stroke="none" fill-opacity=".5"/><rect x="250" y="146" width="28" height="66" rx="3" fill="currentColor" stroke="none" fill-opacity=".6"/><rect x="290" y="124" width="28" height="88" rx="3" fill="currentColor" stroke="none" fill-opacity=".5"/><path d="M340 190L376 150 410 166 446 98" stroke-width="5" stroke-opacity=".8"/><circle cx="446" cy="98" r="7" fill="currentColor" stroke="none"/><circle cx="376" cy="150" r="6" fill="currentColor" stroke="none" fill-opacity=".7"/><path d="M319 234V270M319 270L286 416M319 270L352 416" stroke-opacity=".4" stroke-width="4"/><circle cx="96" cy="118" r="27" fill="currentColor" fill-opacity=".5" stroke="none"/><path d="M66 166Q96 150 128 166L138 312H54Z" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M70 312V412M122 312V412" stroke-width="24" stroke-opacity=".42"/><path d="M124 178L190 128" stroke-width="15" stroke-opacity=".5"/><path d="M190 128L236 96" stroke-width="3.5"/><path d="M74 180L56 250" stroke-width="15" stroke-opacity=".5"/></g></svg><svg class="sc s3" viewBox="0 0 470 330" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="40" y="44" width="150" height="196" rx="10" fill="currentColor" fill-opacity=".1" transform="rotate(-7 115 142)"/><path d="M62 84h86M62 108h106M62 132h92M62 156h100M62 180h64" stroke-opacity=".55" transform="rotate(-7 115 142)"/><rect x="170" y="36" width="160" height="206" rx="10" fill="currentColor" fill-opacity=".16"/><path d="M194 76h70" stroke-width="6" stroke-opacity=".8"/><path d="M194 108h112M194 132h112M194 156h96M194 180h108M194 204h60" stroke-opacity=".55"/><rect x="300" y="150" width="150" height="120" rx="10" fill="currentColor" fill-opacity=".14"/><path d="M300 180H450M300 210H450M300 240H450M340 150V270M390 150V270" stroke-opacity=".55" stroke-width="2.5"/><rect x="340" y="210" width="50" height="30" fill="currentColor" fill-opacity=".4" stroke="none"/><path d="M404 66L330 262" stroke-width="12" stroke-opacity=".75"/><path d="M330 262l-5 20 18-9z" fill="currentColor" stroke="none"/><path d="M370 26c24-8 56 6 52 34s-40 24-34 2" stroke-opacity=".6" stroke-width="3"/></g></svg>'
+  [technik]='<svg class="sc s1" viewBox="0 0 460 420" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="126" cy="132" r="26" fill="currentColor" fill-opacity=".5" stroke="none"/><path d="M90 126A36 36 0 0 1 162 126Z" fill="currentColor" fill-opacity=".75" stroke="none"/><path d="M82 128H170" stroke-width="7" stroke-opacity=".8"/><path d="M118 90h16v14h-16z" fill="currentColor" stroke="none" fill-opacity=".6"/><path d="M92 184Q126 166 160 184L170 312H80Z" fill="currentColor" fill-opacity=".42" stroke="none"/><path d="M98 312V412M148 312V412" stroke-width="24" stroke-opacity=".44"/><path d="M156 196L222 168" stroke-width="16" stroke-opacity=".5"/><path d="M96 196L74 262" stroke-width="16" stroke-opacity=".5"/><rect x="206" y="48" width="226" height="200" rx="6" fill="currentColor" fill-opacity=".12"/><path d="M230 84H410M230 124H410M230 164H410M230 204H410M270 60V236M320 60V236M370 60V236" stroke-opacity=".28" stroke-width="2"/><circle cx="296" cy="146" r="38" stroke-width="3.5"/><circle cx="296" cy="146" r="12"/><path d="M340 110L402 110L402 196L350 196" stroke-width="3.5" stroke-opacity=".85"/><path d="M214 40L440 40" stroke-opacity=".5"/><rect x="190" y="30" width="30" height="20" rx="10" fill="currentColor" fill-opacity=".5" stroke="none"/></g></svg><svg class="sc s2" viewBox="0 0 400 380" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="132" cy="158" r="64" stroke-width="22" stroke-dasharray="14 11.1" stroke-opacity=".6" stroke-linecap="butt"/><circle cx="132" cy="158" r="54" stroke-opacity=".7"/><circle cx="132" cy="158" r="20" fill="currentColor" fill-opacity=".3"/><path d="M132 104V212M78 158H186M94 120L170 196M170 120L94 196" stroke-opacity=".35" stroke-width="2.5"/><circle cx="262" cy="244" r="44" stroke-width="18" stroke-dasharray="12.7 10.5" stroke-opacity=".6" stroke-linecap="butt"/><circle cx="262" cy="244" r="36" stroke-opacity=".7"/><circle cx="262" cy="244" r="13" fill="currentColor" fill-opacity=".35"/><circle cx="310" cy="96" r="30" stroke-width="14" stroke-dasharray="10 8.85" stroke-opacity=".55" stroke-linecap="butt"/><circle cx="310" cy="96" r="24" stroke-opacity=".7"/><circle cx="310" cy="96" r="9" fill="currentColor" fill-opacity=".35"/><path d="M40 336L100 276L124 300L66 360Z" fill="currentColor" fill-opacity=".2" stroke-opacity=".6"/></g></svg><svg class="sc s3" viewBox="0 0 470 340" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M150 70L232 116V212L150 258L68 212V116Z" fill="currentColor" fill-opacity=".14"/><path d="M150 164L68 116M150 164L232 116" stroke-opacity=".7"/><path d="M150 164V258" stroke-dasharray="5 7" stroke-opacity=".6"/><ellipse cx="350" cy="104" rx="58" ry="19" fill="currentColor" fill-opacity=".14"/><path d="M292 104V214M408 104V214" /><path d="M292 214C292 236 408 236 408 214" stroke-opacity=".8"/><path d="M292 214C292 192 408 192 408 214" stroke-dasharray="5 7" stroke-opacity=".5"/><path d="M68 292H232M68 280V304M232 280V304" stroke-opacity=".8"/><path d="M92 292l10-6v12zM208 292l-10-6v12z" fill="currentColor" stroke="none" fill-opacity=".8"/><path d="M440 104V214M430 104h20M430 214h20" stroke-opacity=".6"/><path d="M330 292L352 236L374 292" stroke-width="4"/><circle cx="352" cy="232" r="7" fill="currentColor" stroke="none"/><path d="M338 262h28" stroke-opacity=".5"/></g></svg>'
+)
+# SCENES-END
+# Akzentfarben (RGB) = Hintergrundfarbe des jeweiligen App-Logos. Sie steuern Glow, Schatten, Hover und den Start-Button.
+# Apps ohne Eintrag bekommen DEFAULT_ACCENT.
+DEFAULT_ACCENT="99 102 241"
+declare -A ACCENT=(
+  [photocraft]="47 123 245"  [vectorcraft]="231 87 62"  [filmcraft]="138 92 246"
+  [lightcraft]="243 166 23"  [pdfcraft]="17 165 138"  [effectcraft]="224 54 144"
+  [designcraft]="122 181 27"  [figcraft]="2 218 150"  [wordcraft]="60 91 220"
+  [soundcraft]="20 170 197"  [deckcraft]="242 107 30"  [cadcraft]="19 164 199"
+  [gridcraft]="29 157 84"  [waread]="20 74 58"
+)
+
+# HTML-Sonderzeichen maskieren (Ersetzungen in Anführungszeichen: bash 5.2 behandelt & sonst als Treffer)
+html_esc() {
+  local s=$1
+  s=${s//&/"&amp;"}
+  s=${s//</"&lt;"}
+  s=${s//>/"&gt;"}
+  s=${s//\"/"&quot;"}
+  s=${s//\'/"&#39;"}
+  printf '%s' "$s"
+}
+svg_glyph() {
+  printf '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="%s"/></svg>' "$1"
+}
+# Gibt das Logo als data:-URI aus (damit die Seite ohne weitere Dateien/Internet auskommt).
+icon_uri() {
+  local slug=$1
+  [[ -n ${ICON_B64[$slug]:-} ]] || return 1
+  printf 'data:image/webp;base64,%s' "${ICON_B64[$slug]}"
+}
+# LOGO-BEGIN
+# Raspberry-Pi-Logo (WebP, 120 px hoch, transparent), direkt in die Seite eingebettet -> kein Internet nötig.
+LOGO_B64='too much text and token wast. here is normaly a base hard coded picture'
+# LOGO-END
+# ICONS-BEGIN
+# Offizielle App-Logos (WebP, 256x256), direkt eingebettet -> kein Internet nötig.
+# Für eine neue App hier einen Eintrag ergänzen (WebP, base64), sonst zeigt die Karte nur eine einfarbige Kachel.
+declare -A ICON_B64=(
+  [photocraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [vectorcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [filmcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [lightcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [pdfcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [effectcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [designcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [figcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [wordcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [soundcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [deckcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [cadcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [gridcraft]='too much text and token wast. here is normaly a base hard coded picture'
+  [waread]='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'
+)
+# ICONS-END
+make_index() {
+  local tmp="$WEBROOT/.index.new"
+  local entry slug name desc cg cid ver vtxt vcls uri ar k v apps rr gg bb on href
+  local last=0 lastfmt='' lastiso='' tgt t
+  local i=0 n total=0
+  local -A V=() CNT=() LIVE=() HREF=()
+  # Versionen unverändert aus der Versionsdatei lesen (slug=tag)
+  while IFS='=' read -r k v || [[ -n ${k:-} ]]; do
+    [[ -n ${k:-} ]] && V[$k]=$v
+  done < "$VERS"
+  # Lokale Apps (nicht von craft-update installiert): nur nachsehen, ob sie da sind. Version und Link kommen von dort.
+  for entry in "${LOCAL_APPS[@]}"; do
+    IFS='|' read -r slug name desc <<<"$entry"
+    local_probe "$slug" || continue
+    LIVE[$slug]=1; V[$slug]=$LOCAL_VER; HREF[$slug]=$LOCAL_HREF
+  done
+  # Vorlauf: installierte Apps zählen (Craft-Apps: Symlink vorhanden; lokale Apps: von local_probe gefunden)
+  for entry in "${ALL_APPS[@]}"; do
+    IFS='|' read -r slug name desc <<<"$entry"
+    [[ -L "$WEBROOT/$slug" || -n ${LIVE[$slug]:-} ]] || continue
+    cg=${CATEGORY[$slug]:-weitere}
+    [[ -n ${CAT_TITLE[$cg]:-} ]] || cg=weitere
+    CNT[$cg]=$(( ${CNT[$cg]:-0} + 1 ))
+    total=$(( total + 1 ))
+    # Zeitpunkt der Installation des aktuell ausgelieferten Releases (install_app setzt per touch den Zeitstempel).
+    # Nur Craft-Apps: lokale Apps haben keinen Symlink im Webroot und zählen für "Zuletzt aktualisiert" nicht.
+    [[ -L "$WEBROOT/$slug" ]] && tgt=$(readlink -f -- "$WEBROOT/$slug" 2>/dev/null) && t=$(stat -c %Y -- "$tgt" 2>/dev/null) && (( t > last )) && last=$t
+  done
+  if (( last > 0 )); then
+    lastfmt=$(date -d "@$last" '+%d.%m.%Y, %H:%M' 2>/dev/null) || lastfmt=''
+    lastiso=$(date -d "@$last" -Iseconds 2>/dev/null) || lastiso=''
+  fi
+  {
+    cat <<'HTML'
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f4f5fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d13" media="(prefers-color-scheme: dark)">
+<title>Pi Apps</title>
+HTML
+    printf '<link rel="icon" type="image/webp" href="data:image/webp;base64,%s">\n' "$LOGO_B64"
+    cat <<'HTML'
+<script>try{var t=localStorage.getItem('pi-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<noscript><style>.needjs{display:none!important}</style></noscript>
+<style>
+:root{
+  --font:ui-rounded,"SF Pro Rounded",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg:#f4f5fa;--card:#fff;--fg:#151823;--mu:#5f667a;--ln:rgb(21 24 35 / .09);
+  --glass:rgb(244 245 250 / .74);--field:rgb(21 24 35 / .055);
+  --sh:0 1px 2px rgb(21 24 35 / .05),0 12px 28px -16px rgb(21 24 35 / .22);
+  --b1:rgb(99 102 241 / .17);--b2:rgb(236 72 153 / .11);--b3:rgb(14 165 233 / .12);
+  --cardg:rgb(255 255 255 / .7);--za:.26;--sca:.34;--scb:1.3px;--rim:0;--wash:.07;--dim:0;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#0b0d13;--card:#151822;--fg:#eef0f7;--mu:#98a0b6;--ln:rgb(255 255 255 / .09);
+  --glass:rgb(11 13 19 / .74);--field:rgb(255 255 255 / .07);
+  --sh:0 1px 2px rgb(0 0 0 / .45),0 16px 34px -18px rgb(0 0 0 / .85);
+  --b1:rgb(99 102 241 / .26);--b2:rgb(236 72 153 / .14);--b3:rgb(14 165 233 / .14);
+  --cardg:rgb(21 24 34 / .62);--za:.36;--sca:.2;--scb:1.3px;--rim:.55;--wash:.11;--dim:.16;color-scheme:dark}}
+:root[data-theme=dark]{
+  --bg:#0b0d13;--card:#151822;--fg:#eef0f7;--mu:#98a0b6;--ln:rgb(255 255 255 / .09);
+  --glass:rgb(11 13 19 / .74);--field:rgb(255 255 255 / .07);
+  --sh:0 1px 2px rgb(0 0 0 / .45),0 16px 34px -18px rgb(0 0 0 / .85);
+  --b1:rgb(99 102 241 / .26);--b2:rgb(236 72 153 / .14);--b3:rgb(14 165 233 / .14);
+  --cardg:rgb(21 24 34 / .62);--za:.36;--sca:.2;--scb:1.3px;--rim:.55;--wash:.11;--dim:.16;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;overflow-x:hidden;overflow-x:clip;font:16px/1.5 var(--font);color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(900px 520px at 6% -8%,var(--b1),transparent 62%),
+             radial-gradient(760px 480px at 98% 0%,var(--b2),transparent 60%),
+             radial-gradient(900px 600px at 50% 115%,var(--b3),transparent 62%)}
+.wrap{max-width:1480px;margin:0 auto;padding-inline:max(20px,env(safe-area-inset-left),env(safe-area-inset-right))}
+@media(min-width:900px){.wrap{padding-inline:max(36px,env(safe-area-inset-left),env(safe-area-inset-right))}}
+
+/* Kopfzeile */
+.top{background:var(--glass);-webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);border-bottom:1px solid var(--ln);padding-top:env(safe-area-inset-top);z-index:10}
+@media(min-width:641px){.top{position:sticky;top:0}}
+.top .wrap{display:flex;align-items:center;gap:12px;padding-block:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px;margin-right:auto;color:inherit;text-decoration:none;font-weight:780;font-size:1.4rem;letter-spacing:-.03em}
+.mark{display:block;flex:none;height:40px;width:auto;filter:drop-shadow(0 0 1px rgb(255 255 255 / var(--rim))) drop-shadow(0 5px 7px rgb(0 0 0 / .18))}
+.search{position:relative;flex:0 1 360px;order:2;display:block}
+.search input{width:100%;height:46px;border:1px solid transparent;border-radius:15px;padding:0 44px 0 44px;font:inherit;font-size:16px;color:var(--fg);background:var(--field);outline:none;-webkit-appearance:none;appearance:none;transition:background .2s,border-color .2s,box-shadow .2s}
+.search input::placeholder{color:var(--mu)}
+.search input:focus{background:var(--card);border-color:rgb(99 102 241 / .55);box-shadow:0 0 0 4px rgb(99 102 241 / .18)}
+.search>svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:19px;height:19px;color:var(--mu);pointer-events:none}
+.search kbd{position:absolute;right:12px;top:50%;transform:translateY(-50%);font:600 .74rem var(--font);color:var(--mu);border:1px solid var(--ln);border-radius:7px;padding:1px 7px;pointer-events:none}
+.search input:not(:placeholder-shown)~kbd{display:none}
+@media(hover:none){.search kbd{display:none}}
+.icon-btn{order:3;width:46px;height:46px;border:0;border-radius:15px;background:var(--field);color:var(--fg);display:grid;place-items:center;cursor:pointer;transition:background .2s,transform .15s}
+.icon-btn:hover{background:var(--ln)}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn svg{width:21px;height:21px}
+@media(max-width:640px){.brand{order:1}.icon-btn{order:2}.search{order:3;flex:1 1 100%}}
+
+/* Einstieg */
+.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:22px 40px;flex-wrap:wrap;padding-block:clamp(26px,4.5vw,54px) clamp(6px,1.4vw,14px)}
+.hero h1{margin:0;font-size:clamp(2.05rem,4.8vw,3.2rem);line-height:1.04;letter-spacing:-.04em;font-weight:790}
+.hero h1 em{font-style:normal;background:linear-gradient(100deg,#6366f1,#ec4899 58%,#f59e0b);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{margin:12px 0 0;max-width:46ch;color:var(--mu);font-size:clamp(1rem,1.5vw,1.12rem)}
+
+/* Kategorien */
+main{position:relative;isolation:isolate;padding-bottom:clamp(28px,5vw,56px)}
+/* Jede Kategorie: Banner + Hintergrundzone in denselben zwei Farben. Die Zone ist oben und unten per Maske
+   ausgeblendet und überlappt die Nachbarzonen, dadurch gehen die Farben weich ineinander über. */
+.cat{--c1:99 102 241;--c2:139 92 246;position:relative;margin-top:clamp(70px,8vw,110px)}
+.zone{position:absolute;z-index:-1;left:0;right:0;top:-190px;bottom:-190px;pointer-events:none;overflow:hidden;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 190px,#000 calc(100% - 190px),transparent 100%);
+  mask-image:linear-gradient(180deg,transparent 0,#000 190px,#000 calc(100% - 190px),transparent 100%)}
+.zone::before{content:"";position:absolute;inset:0;
+  background:radial-gradient(60% 52% at 10% 34%,rgb(var(--c1) / var(--za)),transparent 72%),
+             radial-gradient(60% 52% at 92% 70%,rgb(var(--c2) / var(--za)),transparent 72%),
+             linear-gradient(115deg,rgb(var(--c1) / calc(var(--za) * .6)),rgb(var(--c2) / calc(var(--za) * .6)))}
+.zi{position:absolute;inset:190px 0}   /* = Bereich der Kategorie selbst; Szenen werden relativ dazu platziert */
+.sc{position:absolute;display:block;height:auto;width:clamp(250px,26vw,420px);color:rgb(var(--c1) / var(--sca));filter:blur(var(--scb))}
+.sc.s1{left:31%;top:158px}      /* direkt unter dem Banner beginnen, nach unten hin laufen sie in der Zonenmaske aus */
+.sc.s2{right:1.5%;top:158px}
+.sc.s3{left:1.5%;top:300px}
+:root[data-theme=dark] .sc{color:rgb(255 255 255 / var(--sca))}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .sc{color:rgb(255 255 255 / var(--sca))}}
+.banner{position:relative;overflow:hidden;display:flex;align-items:center;min-height:136px;padding:24px 30px;margin-bottom:16px;border-radius:28px;color:#fff;
+  background:radial-gradient(90% 160% at 0% 0%,rgb(255 255 255 / .2),transparent 60%),linear-gradient(115deg,rgb(var(--c1)),rgb(var(--c2)));
+  box-shadow:0 22px 44px -26px rgb(var(--c1) / .8),inset 0 1px 0 rgb(255 255 255 / .25)}
+.banner::after{content:"";position:absolute;inset:0;background:rgb(0 0 0 / var(--dim));pointer-events:none}
+.banner .art{position:absolute;top:0;right:0;width:min(62%,760px);height:100%;pointer-events:none;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 40%);mask-image:linear-gradient(90deg,transparent 0,#000 40%)}
+.bn-t{position:relative;z-index:2;display:flex;align-items:center;gap:16px}
+.bn-t .dot{display:grid;place-items:center;flex:none;width:48px;height:48px;border-radius:16px;background:rgb(255 255 255 / .2);box-shadow:inset 0 1px 0 rgb(255 255 255 / .3)}
+.bn-t .dot svg{width:24px;height:24px}
+.bn-t h2{margin:0;font-size:clamp(1.4rem,2.6vw,1.85rem);line-height:1.1;letter-spacing:-.025em;font-weight:780}
+.bn-t small{display:block;margin-top:4px;font-size:.95rem;line-height:1.3;color:rgb(255 255 255 / .9)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px}
+
+/* Karten */
+.card{--ar:99 102 241;position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"ic tx go" "ic ver go";align-items:center;column-gap:16px;row-gap:8px;
+  min-height:112px;padding:18px;border-radius:24px;color:inherit;text-decoration:none;
+  background:radial-gradient(120% 150% at 0% 0%,rgb(var(--ar) / var(--wash)),transparent 60%),var(--cardg);
+  -webkit-backdrop-filter:blur(5px) saturate(1.25);backdrop-filter:blur(5px) saturate(1.25);
+  border:1px solid var(--ln);box-shadow:var(--sh);
+  transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s,border-color .25s;animation:rise .55s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--i,0) * 35ms)}
+.card:active{transform:scale(.985)}
+.card:focus-visible{outline:3px solid rgb(var(--ar) / .7);outline-offset:3px}
+@media(hover:hover){
+  .card:hover{transform:translateY(-4px);border-color:rgb(var(--ar) / .45);box-shadow:0 1px 2px rgb(21 24 35 / .06),0 22px 40px -22px rgb(var(--ar) / .45)}
+  .card:hover .ic{transform:scale(1.05)}
+  .card:hover .go{transform:translateX(3px) scale(1.06);box-shadow:0 10px 20px -8px rgb(var(--ar) / .9),inset 0 1px 0 rgb(255 255 255 / .3)}
+}
+.ic{grid-area:ic;position:relative;width:68px;height:68px;border-radius:19px;transition:transform .3s cubic-bezier(.2,.7,.2,1)}
+.ic img,.ic .gl{display:block;width:100%;height:100%;border-radius:inherit}
+.ic img{object-fit:cover;box-shadow:0 9px 16px -11px rgb(var(--ar) / .55)}
+.ic .gl{display:grid;place-items:center;color:#fff;background:linear-gradient(150deg,rgb(var(--ar)),rgb(var(--ar) / .72));box-shadow:0 9px 16px -11px rgb(var(--ar) / .55),inset 0 1px 0 rgb(255 255 255 / .3)}
+.tx{grid-area:tx;align-self:end;min-width:0}
+.tx b{display:block;font-size:1.12rem;line-height:1.25;font-weight:720;letter-spacing:-.015em}
+.ds{display:block;color:var(--mu);font-size:.93rem;line-height:1.35;overflow-wrap:anywhere}
+.ver{grid-area:ver;align-self:start;justify-self:start;max-width:100%;font-size:.75rem;font-weight:650;line-height:1.5;padding:1px 10px;border-radius:99px;font-variant-numeric:tabular-nums;
+  background:rgb(var(--ar) / .14);border:1px solid rgb(var(--ar) / .3);overflow-wrap:anywhere}
+.ver.unk{background:var(--field);border-color:var(--ln);color:var(--mu)}
+.go{grid-area:go;display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:rgb(var(--ar));color:var(--on,#fff);box-shadow:0 8px 16px -8px rgb(var(--ar) / .75),inset 0 1px 0 rgb(255 255 255 / .3);transition:transform .25s,box-shadow .25s}
+.go svg{width:18px;height:18px}
+@media(max-width:640px){
+  .cat{margin-top:64px}
+  .zone{top:-150px;bottom:-150px;-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 150px,#000 calc(100% - 150px),transparent 100%);mask-image:linear-gradient(180deg,transparent 0,#000 150px,#000 calc(100% - 150px),transparent 100%)}
+  .zi{inset:150px 0}
+  .sc{width:270px}
+  .sc.s1{left:-60px;top:140px}
+  .sc.s2{right:-70px;top:400px}
+  .sc.s3{left:14%;top:650px}
+  .banner{min-height:108px;padding:18px 20px;margin-bottom:12px;border-radius:24px}
+  .banner .art{width:52%;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 55%);mask-image:linear-gradient(90deg,transparent 0,#000 55%)}
+  .bn-t{max-width:60%}
+  .bn-t .dot,.bn-t .n{display:none}
+  .grid{gap:12px}
+  .card{min-height:92px;padding:14px 16px;column-gap:14px;row-gap:6px;border-radius:22px}
+  .ic{width:60px;height:60px;border-radius:17px}
+}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+.empty{margin:48px 0;padding:34px 20px;text-align:center;color:var(--mu);border:1px dashed var(--ln);border-radius:22px}
+.empty code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--field);padding:2px 7px;border-radius:7px}
+.foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 20px;padding-block:20px calc(26px + env(safe-area-inset-bottom));border-top:1px solid var(--ln);color:var(--mu);font-size:.85rem}
+</style>
+</head>
+<body>
+HTML
+
+    cat <<HTML
+<header class="top"><div class="wrap">
+  <a class="brand" href="./" aria-label="Pi, Startseite"><img class="mark" src="data:image/webp;base64,$LOGO_B64" alt="" width="32" height="40"><span>Pi</span></a>
+  <label class="search needjs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="q" type="search" placeholder="Apps suchen" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Apps suchen"><kbd>/</kbd></label>
+  <button class="icon-btn needjs" id="theme" type="button" aria-label="Zwischen hell und dunkel wechseln"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button>
+</div></header>
+HTML
+
+    cat <<HTML
+<main>
+<section class="hero wrap">
+  <div>
+    <h1>Deine <em>Pi Apps</em></h1>
+    <p>Läuft lokal auf diesem Raspberry Pi. Antippen, und die App startet direkt im Browser.</p>
+  </div>
+</section>
+<div class="wrap"><p class="empty" id="none" hidden>Keine passende App gefunden.</p></div>
+HTML
+
+    if (( total == 0 )); then
+      echo '<div class="wrap"><p class="empty">Noch keine App installiert. Details im Protokoll: <code>journalctl -u craft-update.service</code></p></div>'
+    fi
+
+    for cid in "${CAT_ORDER[@]}"; do
+      n=${CNT[$cid]:-0}
+      (( n > 0 )) || continue
+      (( n == 1 )) && apps="1 App" || apps="$n Apps"
+      printf '<section class="cat" style="--c1:%s;--c2:%s" aria-labelledby="c-%s">\n' \
+        "${CAT_C1[$cid]:-99 102 241}" "${CAT_C2[$cid]:-139 92 246}" "$cid"
+      printf '<div class="zone" aria-hidden="true"><div class="zi">%s</div></div>\n<div class="wrap">\n' "${CAT_SCENE[$cid]:-}"
+      printf '<div class="banner">\n%s\n<div class="bn-t"><span class="dot">%s</span><div><h2 id="c-%s">%s</h2><small>%s<span class="n"> · %s</span></small></div></div>\n</div>\n' \
+        "${CAT_ART[$cid]:-}" "$(svg_glyph "${CAT_GLYPH[$cid]}")" "$cid" "$(html_esc "${CAT_TITLE[$cid]}")" "$(html_esc "${CAT_SUB[$cid]}")" "$apps"
+      echo '<div class="grid">'
+      for entry in "${ALL_APPS[@]}"; do
+        IFS='|' read -r slug name desc <<<"$entry"
+        [[ -L "$WEBROOT/$slug" || -n ${LIVE[$slug]:-} ]] || continue
+        cg=${CATEGORY[$slug]:-weitere}
+        [[ -n ${CAT_TITLE[$cg]:-} ]] || cg=weitere
+        [[ $cg == "$cid" ]] || continue
+        i=$(( i + 1 ))
+        ver=${V[$slug]:-}
+        if [[ -n $ver ]]; then vtxt=$ver; vcls=""; else vtxt="Version unbekannt"; vcls=" unk"; fi
+        ar=${ACCENT[$slug]:-$DEFAULT_ACCENT}
+        read -r rr gg bb <<<"$ar"
+        if (( (rr * 299 + gg * 587 + bb * 114) / 1000 >= 140 )); then on='#10131a'; else on='#fff'; fi   # helle Akzentfarbe: dunkler Pfeil
+        href=${HREF[$slug]:-./$slug/}   # Craft-Apps: ./<slug>/ ; lokale Apps: Ziel aus local_probe
+        printf '<a class="card" href="%s" data-k="%s" style="--ar:%s;--on:%s;--i:%d">\n' \
+          "$(html_esc "$href")" "$(html_esc "$slug ${CAT_TITLE[$cg]}")" "$ar" "$on" "$i"
+        if uri=$(icon_uri "$slug"); then
+          printf '<span class="ic"><img class="ic-img" src="%s" alt="" width="68" height="68" decoding="async"></span>\n' "$uri"
+        else
+          printf '<span class="ic"><span class="gl"></span></span>\n'
+        fi
+        printf '<span class="tx"><b>%s</b><span class="ds">%s</span></span>\n' "$(html_esc "$name")" "$(html_esc "$desc")"
+        printf '<span class="ver%s">%s</span>\n' "$vcls" "$(html_esc "$vtxt")"
+        printf '<span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>\n</a>\n'
+      done
+      echo '</div>'
+      echo '</div>'
+      echo '</section>'
+    done
+
+    echo '</main>'
+    if [[ -n $lastfmt ]]; then
+      printf '<footer class="wrap foot"><span>Zuletzt aktualisiert: <time datetime="%s">%s Uhr</time></span></footer>\n' \
+        "$(html_esc "$lastiso")" "$(html_esc "$lastfmt")"
+    fi
+    cat <<'HTML'
+<script>
+(()=>{
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const root=document.documentElement;
+const isDark=()=>root.dataset.theme?root.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;
+const tb=$('#theme');
+if(tb)tb.addEventListener('click',()=>{const n=isDark()?'light':'dark';root.dataset.theme=n;try{localStorage.setItem('pi-theme',n)}catch(e){}});
+
+/* Suche */
+const q=$('#q'),cards=$$('.card'),secs=$$('.cat'),none=$('#none');
+cards.forEach(c=>{c.dataset.s=(c.textContent+' '+(c.dataset.k||'')).toLowerCase()});
+function filter(){
+  const t=q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let n=0;
+  cards.forEach(c=>{const ok=t.every(w=>c.dataset.s.includes(w));c.hidden=!ok;if(ok)n++});
+  secs.forEach(s=>{s.hidden=!$('.card:not([hidden])',s)});
+  if(none)none.hidden=n>0||!cards.length;
+}
+if(q){
+  q.addEventListener('input',filter);
+  q.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){const c=$('.card:not([hidden])');if(c)location.href=c.href}
+    else if(e.key==='Escape'){q.value='';filter();q.blur()}
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='/'&&!e.metaKey&&!e.ctrlKey&&!e.altKey&&document.activeElement!==q){e.preventDefault();q.focus()}
+  });
+}
+})();
+</script>
+</body>
+</html>
+HTML
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 644 "$tmp" && mv "$tmp" "$WEBROOT/index.html"
+}
+fail=0; found=0
+for entry in "${APPS[@]}"; do
+  IFS='|' read -r slug name desc <<<"$entry"
+  if ! tag=$(latest_tag "$slug"); then
+    echo "$name: kein Release gefunden, übersprungen"
+    continue
+  fi
+  found=$((found + 1))
+  if grep -qxF "${slug}=${tag}" "$VERS" && [[ -L "$WEBROOT/$slug" ]]; then
+    echo "$name: aktuell ($tag)"
+    continue
+  fi
+  echo "$name: installiere $tag ..."
+  if install_app "$slug" "$tag"; then echo "$name: OK ($tag)"; else echo "$name: FEHLER"; fail=1; fi
+  find "$WORK" -mindepth 1 -delete
+done
+# waread (lokale App): nur melden, ob sie erkannt wurde und ob Nginx /waread/ weiterleitet. Ändert nichts.
+if local_probe waread; then
+  echo "waread: installiert ${LOCAL_VER:-(Version unbekannt)}, Karte auf der Startseite"
+  if [[ $WAREAD_URL != *://* ]] && command -v nginx >/dev/null 2>&1; then
+    ngx=$(nginx -T 2>/dev/null || true)
+    # Leere Ausgabe (nginx -T lief nicht): nichts melden, denn dann lässt sich nichts beurteilen.
+    if [[ -n $ngx ]] && ! grep -Eq '^[[:space:]]*include[[:space:]]+[^;#]*waread\.conf' <<<"$ngx"; then
+      echo "waread: HINWEIS: Nginx leitet /waread/ nicht weiter ('include /etc/nginx/snippets/waread.conf*;' im server-Block fehlt)"
+    fi
+  fi
+fi
+make_index || { echo "Startseite konnte nicht erzeugt werden"; fail=1; }
+[[ $found -gt 0 ]] || { echo "Keine einzige App gefunden (Netzwerk oder GitHub-Problem?)"; fail=1; }
+exit $fail
+

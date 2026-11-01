@@ -17,7 +17,7 @@ Stand: Version 0.2.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohn
 | `services/web/` | REST-/SSE-Backend (`src/`), Frontend-Quellen (`public/`), Browsertest |
 | `cleanup/` | Aufbewahrung durchsetzen, stündlich; wöchentlich mit VACUUM |
 | `config/` | `config.example.toml` (alle gelesenen Schlüssel) |
-| `deploy/` | `install.sh`, `waread-update`, `make-release.sh`, systemd-Units, Nginx-Ausschnitt |
+| `deploy/` | `install.sh`, `waread-update`, `make-release.sh`, systemd-Units, Nginx-Ausschnitt, optional die waread-Karte für die Pi-Startseite (`craft-launcher/`) |
 | `docs/` | Installation, Betrieb, Sicherheitsprüfung, Testliste, Zusammenführungsnotizen |
 
 ## Schnellüberblick
@@ -47,11 +47,12 @@ Installation auf dem Pi, Konfiguration, Kopplung und die Prüfungen vor dem Haup
 | `docs/RELEASE-0.2.0.md` | Release 0.2.0: Inhalt, Bauen, Einspielen auf dem Pi, Prüfschritte, Ungeprüftes |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
+| `deploy/craft-launcher/README.md` | Optional: waread-Karte mit Logo auf der Pi-Startseite von `craft-update` (erweiterte Fassung, die du selbst einspielst) |
 | `services/*/README.md`, `cleanup/README.md`, `db/README.md` | Verhalten und Grenzen je Baustein |
 
 ## Wichtige Grenzen
 
-- Das Craft-System auf demselben Pi wird nicht angefasst (`/var/www/craft`, `/var/lib/craft`, `craft-update`, seine Units). `waread` benutzt nur eigene Pfade und Namen.
+- Das Craft-System auf demselben Pi wird nicht angefasst (`/var/www/craft`, `/var/lib/craft`, `craft-update`, seine Units). `waread` benutzt nur eigene Pfade und Namen. Die einzige Verbindung ist optional und geht von `craft-update` aus: `deploy/craft-launcher/` enthält eine erweiterte Fassung, die waread auf der Pi-Startseite verlinkt und dafür nur liest. Sie ändert nichts an den waread-Verzeichnissen, und `install.sh` und `waread-update` installieren sie nicht.
 - Es gibt **keine Update-Quelle** im Paket. `update_source_url` in der Konfiguration ist leer; ohne eigenen Server und eigenen Signaturschlüssel bleibt der Updater inaktiv.
 - Die Abhängigkeitsversionen sind nicht gegen die npm-Registry geprüft, und `baileys` steht auf einem Vorabstand (`7.0.0-rc14`). Prüfe sie vor dem ersten Bau (`docs/SECURITY_TESTS.md`, Abschnitt 1.2).
 - Native Module (`better-sqlite3`, `sharp`) müssen auf derselben Architektur gebaut werden, auf der sie laufen (arm64 für den Pi).
