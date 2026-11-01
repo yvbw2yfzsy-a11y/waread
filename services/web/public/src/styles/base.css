@@ -309,13 +309,7 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 }
 .btn.primary { background: var(--accent); }
 .btn.danger { background: var(--danger-fill); }
-.btn:disabled, .glass-btn:disabled { opacity: 0.45; cursor: default; }
-
-.glass-btn {
-  display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px;
-  border: 1px solid var(--glass-stroke); border-radius: var(--r-pill);
-  background: var(--fill); font-size: var(--fs-caption1); font-weight: 600;
-}
+.btn:disabled { opacity: 0.45; cursor: default; }
 
 .field {
   width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: var(--r-sm);
@@ -341,10 +335,10 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 /* ---------- touch feedback ---------- */
 
 /* Pressed controls shrink a little (transform only, no layout). */
-.btn, .icon-btn, .chip, .status-chip, .tab, .glass-btn, .play, .speed, .doc-dl, .to-bottom, .lb-btn, .sheet-item {
+.btn, .icon-btn, .chip, .status-chip, .tab, .play, .speed, .doc-dl, .to-bottom, .lb-btn, .sheet-item {
   transition: transform var(--dur-fast) var(--ease-out);
 }
-.btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active, .glass-btn:not(:disabled):active,
+.btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active,
 .play:active, .speed:active, .doc-dl:active, .to-bottom:active, .lb-btn:active { transform: scale(0.95); }
 
 /* Small controls keep their look but get a 44 px tall hit area. */
@@ -355,7 +349,7 @@ mark { background: rgba(255, 210, 63, 0.35); color: inherit; border-radius: 3px;
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   .spinner { animation: none; }
-  .btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active, .glass-btn:not(:disabled):active,
+  .btn:not(:disabled):active, .icon-btn:active, .chip:active, .status-chip:active, .tab:active,
   .play:active, .speed:active, .doc-dl:active, .to-bottom:active, .lb-btn:active { transform: none; opacity: 0.7; }
 }
 
