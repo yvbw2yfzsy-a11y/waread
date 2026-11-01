@@ -257,30 +257,6 @@ export function applyMessageEdit(
     .immediate();
 }
 
-/** Aelterer Name, bleibt fuer bestehende Aufrufer: Bearbeitung mit der aktuellen Zeit. */
-export function updateMessageText(db: Database, messageId: string, text: string): boolean {
-  const known = db.prepare('SELECT 1 FROM messages WHERE id = ?').get(messageId) !== undefined;
-  if (!known) return false;
-  applyMessageEdit(db, messageId, text);
-  db.prepare('UPDATE messages SET edited = 1 WHERE id = ?').run(messageId);
-  return true;
-}
-
-export interface MessageVersion {
-  version: number;
-  text: string | null;
-  replacedAt: number;
-}
-
-/** Fruehere Fassungen einer Nachricht, aelteste zuerst. Der aktuelle Text steht in messages.text. */
-export function listMessageVersions(db: Database, messageId: string): MessageVersion[] {
-  return db
-    .prepare(
-      'SELECT version, text, replaced_at AS replacedAt FROM message_versions WHERE message_id = ? ORDER BY version',
-    )
-    .all(messageId) as MessageVersion[];
-}
-
 /**
  * "Fuer alle geloescht" markieren (deleted=1, deleted_at). Text und Medien bleiben unveraendert,
  * ob die Oberflaeche sie zeigt, steuert der Web-Dienst (hide_deleted_content).
@@ -305,19 +281,6 @@ export function setMessageProtected(db: Database, messageId: string, on: boolean
     ? db.prepare('UPDATE messages SET protected_at = COALESCE(protected_at, ?) WHERE id = ?').run(at, messageId)
     : db.prepare('UPDATE messages SET protected_at = NULL WHERE id = ?').run(messageId);
   return info.changes > 0;
-}
-
-/** Anzahl geschuetzter Nachrichten und Summe ihrer fertig geladenen Mediendateien (Bytes). */
-export function countProtected(db: Database): { messages: number; mediaBytes: number } {
-  const r = db
-    .prepare(
-      `SELECT COUNT(*) AS n,
-              COALESCE(SUM(CASE WHEN md.status = 'ready' THEN md.size_bytes END), 0) AS bytes
-         FROM messages m LEFT JOIN media md ON md.message_id = m.id
-        WHERE m.protected_at IS NOT NULL`,
-    )
-    .get() as { n: number; bytes: number };
-  return { messages: r.n, mediaBytes: r.bytes };
 }
 
 // ---------------------------------------------------------------------------
@@ -484,189 +447,6 @@ export function markPlayed(db: Database, messageId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Suche
-// ---------------------------------------------------------------------------
-
-export interface SearchFilters {
-  chatId?: string;
-  type?: string;
-  /** wa_timestamp >= from */
-  from?: number;
-  /** wa_timestamp <= to */
-  to?: number;
-  /** nur eingehende, ungesehene Nachrichten */
-  onlyNew?: boolean;
-  /** ERWEITERUNG: Maximalzahl Treffer, Standard 100, hoechstens 1000 */
-  limit?: number;
-}
-
-/** Rueckgabeform von searchMessages (im Vertrag nur als any[] angegeben). */
-export interface MessageHit {
-  id: string;
-  chatId: string;
-  chatName: string | null;
-  isGroup: boolean;
-  sender: string;
-  waTimestamp: number;
-  receivedAt: number;
-  direction: Direction;
-  type: MessageType;
-  text: string | null;
-  replyTo: string | null;
-  edited: boolean;
-  deleted: boolean;
-  seenAt: number | null;
-  playedAt: number | null;
-  /** null, wenn zur Nachricht keine media-Zeile existiert (z. B. reine Textnachricht) */
-  media: null | {
-    status: MediaStatus;
-    filePath: string | null;
-    thumbnailPath: string | null;
-    mimeType: string | null;
-    sizeBytes: number | null;
-    durationSeconds: number | null;
-  };
-}
-
-/**
- * Macht aus Nutzereingabe eine sichere FTS5-Abfrage: jedes Wort wird als Phrase in
- * Anfuehrungszeichen gesetzt (FTS-Operatoren wie AND, NEAR, -, : werden so zu normalem Text),
- * das letzte Wort zusaetzlich als Praefix ("urlau"* findet "Urlaub"). Mehrere Woerter = UND.
- * null, wenn kein einziges Wort Buchstaben oder Ziffern enthaelt.
- */
-function toFtsMatch(raw: string): string | null {
-  const tokens = raw
-    .split(/\s+/)
-    .map((t) => t.replace(/"/g, ''))
-    .filter((t) => /[\p{L}\p{N}]/u.test(t));
-  if (tokens.length === 0) return null;
-  return tokens.map((t, i) => (i === tokens.length - 1 ? `"${t}"*` : `"${t}"`)).join(' ');
-}
-
-interface HitRow {
-  id: string;
-  chatId: string;
-  chatName: string | null;
-  isGroup: number;
-  sender: string;
-  waTimestamp: number;
-  receivedAt: number;
-  direction: Direction;
-  type: MessageType;
-  text: string | null;
-  replyTo: string | null;
-  edited: number;
-  deleted: number;
-  seenAt: number | null;
-  playedAt: number | null;
-  mediaStatus: MediaStatus | null;
-  mediaFilePath: string | null;
-  mediaThumbnailPath: string | null;
-  mediaMimeType: string | null;
-  mediaSizeBytes: number | null;
-  mediaDurationSeconds: number | null;
-}
-
-/**
- * Volltextsuche ueber text, caption, filename, chat_name und sender_name (FTS5, unicode61,
- * Umlaute/Akzente werden ignoriert: "muller" findet "Müller"; "ß" wird NICHT zu "ss" gefaltet).
- * Ergebnis: neueste zuerst (wa_timestamp absteigend).
- *  - leere/blanke query: kein Textfilter, nur die Filter (z. B. Chatverlauf oder alle "Neu")
- *  - nicht-leere query ohne ein einziges Wort aus Buchstaben/Ziffern (z. B. nur "*" oder ein
- *    Emoji): leeres Ergebnis, nie "alles"
- */
-export function searchMessages(
-  db: Database,
-  query: string,
-  filters: SearchFilters = {},
-): MessageHit[] {
-  const where: string[] = [];
-  const params: unknown[] = [];
-
-  const trimmed = (query ?? '').trim();
-  if (trimmed !== '') {
-    const match = toFtsMatch(trimmed);
-    if (match === null) return [];
-    where.push(
-      `m.id IN (SELECT x.message_id FROM messages_fts_map x
-                WHERE x.fts_rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))`,
-    );
-    params.push(match);
-  }
-  if (filters.chatId !== undefined) {
-    where.push('m.chat_id = ?');
-    params.push(filters.chatId);
-  }
-  if (filters.type !== undefined) {
-    where.push('m.type = ?');
-    params.push(filters.type);
-  }
-  if (filters.from !== undefined) {
-    assertInt('from', filters.from);
-    where.push('m.wa_timestamp >= ?');
-    params.push(filters.from);
-  }
-  if (filters.to !== undefined) {
-    assertInt('to', filters.to);
-    where.push('m.wa_timestamp <= ?');
-    params.push(filters.to);
-  }
-  if (filters.onlyNew) {
-    where.push("m.direction = 'in' AND m.seen_at IS NULL");
-  }
-  const limit = Math.min(Math.max(1, Math.trunc(filters.limit ?? 100)), 1000);
-
-  const rows = db
-    .prepare(
-      `SELECT m.id AS id, m.chat_id AS chatId, c.name AS chatName, c.is_group AS isGroup,
-              m.sender AS sender, m.wa_timestamp AS waTimestamp, m.received_at AS receivedAt,
-              m.direction AS direction, m.type AS type, m.text AS text, m.reply_to AS replyTo,
-              m.edited AS edited, m.deleted AS deleted, m.seen_at AS seenAt, m.played_at AS playedAt,
-              md.status AS mediaStatus, md.file_path AS mediaFilePath,
-              md.thumbnail_path AS mediaThumbnailPath, md.mime_type AS mediaMimeType,
-              md.size_bytes AS mediaSizeBytes, md.duration_seconds AS mediaDurationSeconds
-       FROM messages m
-       JOIN chats c ON c.id = m.chat_id
-       LEFT JOIN media md ON md.message_id = m.id
-       ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
-       ORDER BY m.wa_timestamp DESC, m.id DESC
-       LIMIT ?`,
-    )
-    .all(...params, limit) as HitRow[];
-
-  return rows.map(
-    (r): MessageHit => ({
-      id: r.id,
-      chatId: r.chatId,
-      chatName: r.chatName,
-      isGroup: r.isGroup === 1,
-      sender: r.sender,
-      waTimestamp: r.waTimestamp,
-      receivedAt: r.receivedAt,
-      direction: r.direction,
-      type: r.type,
-      text: r.text,
-      replyTo: r.replyTo,
-      edited: r.edited === 1,
-      deleted: r.deleted === 1,
-      seenAt: r.seenAt,
-      playedAt: r.playedAt,
-      media:
-        r.mediaStatus === null
-          ? null
-          : {
-              status: r.mediaStatus,
-              filePath: r.mediaFilePath,
-              thumbnailPath: r.mediaThumbnailPath,
-              mimeType: r.mediaMimeType,
-              sizeBytes: r.mediaSizeBytes,
-              durationSeconds: r.mediaDurationSeconds,
-            },
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Einstellungen
 // ---------------------------------------------------------------------------
 
@@ -804,14 +584,4 @@ export function pullEventsSince(
     }
     return { id: r.id, type: r.type, payload };
   });
-}
-
-/**
- * ERWEITERUNG ueber den Vertrag hinaus: loescht Events mit created_at < olderThan (Unix-
- * Sekunden) und gibt die Anzahl zurueck. Der Vertrag sagt, der Web-Dienst "leert alte Zeilen
- * periodisch", nennt dafuer aber keine Funktion. ids werden dank AUTOINCREMENT nie wiederverwendet.
- */
-export function pruneEvents(db: Database, olderThan: number): number {
-  assertInt('olderThan', olderThan);
-  return db.prepare('DELETE FROM events_outbox WHERE created_at < ?').run(olderThan).changes;
 }
