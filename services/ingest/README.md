@@ -140,7 +140,8 @@ Der gemeinsame Vertrag legt Tabellen fest, nicht die Schlüssel- und Ereignisnam
 **Version 2:** Der Ingest hört zusätzlich auf `messages.update` (Empfangsereignis, lokal aus ohnehin empfangenen Nachrichten erzeugt):
 `REVOKE` setzt `deleted`/`deleted_at`, `MESSAGE_EDIT` legt die alte Fassung in `message_versions` ab und setzt den neuen Text (`applyMessageEdit`).
 Das Kurzzitat (`contextInfo.quotedMessage`) und `@Nummer` → `@Name` (`mentionedJid`) werden beim Speichern aufgelöst. Einmal-Medien: Journalzeile
-`viewonce_probe` (nur Ja/Nein), Speichern nur mit `store_view_once = true`. Nicht geladene Medien (Regel „Aus“, zu groß, Verlauf, Netzfehler) behalten ihre
+`viewonce_probe` (nur Ja/Nein), Speichern nur mit `store_view_once = true`. Live kommen sie ohne Inhalt und ohne Schlüssel an (`<unavailable type="view_once"/>`):
+Hinweiszeile „Einmal-Medium (nur auf dem Handy zu öffnen)“, Journalzeile mit `"unavailable":true`. Nicht geladene Medien (Regel „Aus“, zu groß, Verlauf, Netzfehler) behalten ihre
 Schlüssel im privaten Speicher (`deferred_media`), `media.skip_reason`/`loadable` sagen der Oberfläche warum und ob „Jetzt laden“ geht. Die Tabelle
 `ingest_commands` ist der Befehlskanal des Web-Dienstes (`load_media`); der Ingest fragt sie im selben Takt wie `connection.command` ab (`src/commands.ts`)
 und räumt alle 10 Minuten zurückgestellte Schlüssel auf (Nachricht weg oder Medien-Aufbewahrung abgelaufen, geschützte Nachrichten ausgenommen).
@@ -176,7 +177,7 @@ und räumt alle 10 Minuten zurückgestellte Schlüssel auf (Nachricht weg oder M
 - **Profilbilder** (`avatar_path`) werden nicht geladen (das wäre eine Abfrage an WhatsApp).
 - **Kopplung per Code mit Telefonnummer** (`requestPairingCode`) fehlt; nur QR. Wer das iPhone selbst als Bildschirm nutzt, braucht einen zweiten Bildschirm.
 - **Nachladen per Tipp** („Medium jetzt laden") gibt es nicht. Ist `auto_download_<art> = false`, bleibt der Status dauerhaft `pending`; die Oberfläche kann das von „wird geladen" nicht unterscheiden.
-- **Einmal-Ansehen-Medien** werden bewusst nicht gespeichert (`system`-Nachricht mit Hinweis).
+- **Einmal-Ansehen-Medien**, die live eintreffen, lassen sich nicht speichern: WhatsApp schickt sie verknüpften Geräten ohne Inhalt und ohne Schlüssel (`<unavailable type="view_once"/>`), es bleibt eine `system`-Nachricht mit Hinweis. Kommen sie mit Inhalt an (etwa im Verlauf), speichert der Ingest sie nur mit `store_view_once = true`.
 - Ist die Warteschlange voll (`max_queue_length`, Standard 500), wird das Medium `failed` und **nicht** später nachgeholt.
 - Sticker werden als `image` gespeichert.
 

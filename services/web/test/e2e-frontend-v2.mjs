@@ -219,6 +219,19 @@ let anna;
   ok('Schild setzen: Datenbank und Symbol', dbq("SELECT protected_at FROM messages WHERE id = 'q1'")[0]?.protected_at > 0 && (await q1.locator('.meta-shield').count()) === 1);
 
   ok('Einmal (nicht gespeichert): Hinweistext', (await row(page, 'o1').innerText()).includes('nicht gespeichert'));
+  // Ohne Datei darf das Menue nicht "Hier bleibt sie ansehbar" behaupten.
+  const o1 = row(page, 'o1');
+  await o1.scrollIntoViewIfNeeded();
+  await o1.locator('.text').click({ position: { x: 20, y: 10 } });
+  await page.waitForSelector('.modal-panel.sheet');
+  const o1s = await page.locator('.modal-panel.sheet').innerText();
+  ok('Einmal ohne Datei, Menue: ehrlicher Hinweis, kein "ansehbar"', o1s.includes('Einmal-Medium') && o1s.includes('ohne Datei') && o1s.includes('auf dem Handy') && !o1s.includes('ansehbar'), o1s);
+  await page.keyboard.press('Escape');
+  await row(page, 'o2').locator('.tag-once').click();
+  await page.waitForSelector('.modal-panel.sheet');
+  const o2s = await page.locator('.modal-panel.sheet').innerText();
+  ok('Einmal-Foto gespeichert, Menue: bleibt ansehbar', o2s.includes('Einmal-Foto') && o2s.includes('Hier bleibt sie ansehbar') && !o2s.includes('ohne Datei'), o2s);
+  await page.keyboard.press('Escape');
   ok('Einmal-Foto: Beschriftung und Bild', (await row(page, 'o2').locator('.tag-once').innerText()).includes('Einmal-Foto') && (await row(page, 'o2').locator('.photo').count()) === 1);
   const o3 = row(page, 'o3');
   ok('Einmal-Sprachnachricht: Beschriftung, Player, Schild', (await o3.locator('.tag-once').innerText()).includes('Einmal-Sprachnachricht') && (await o3.locator('.voice').count()) === 1 && (await o3.locator('.meta-shield').count()) === 1);

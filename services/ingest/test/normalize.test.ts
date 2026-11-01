@@ -279,10 +279,11 @@ describe('normalizeMessage: Einmal-Medien, die live ohne Inhalt eintreffen', () 
   it('WhatsApp stellt Einmal-Medien einem verknuepften Geraet nur als <unavailable type="view_once"/> zu: Hinweis statt Verschweigen', () => {
     const m = msgOf(live())
     assert.equal(m.type, 'system')
-    assert.equal(m.text, PLACEHOLDER.viewOnce)
+    assert.equal(m.text, PLACEHOLDER.viewOnceUnavailable)
     assert.equal(m.viewOnce, true)
     assert.equal(m.media, undefined)
-    assert.equal(m.viewOnceProbe, undefined)
+    // Probe fuer das Journal: weder Inhalt noch Schluessel, Art unbekannt.
+    assert.deepEqual(m.viewOnceProbe, { kind: 'unknown', hasKey: false, hasDirectPath: false, hasUrl: false, hasSha: false, unavailable: true })
     assert.equal(m.msgSecret, undefined)
     assert.equal(m.id, 'V1')
     assert.equal(m.chatId, PN)
@@ -295,13 +296,19 @@ describe('normalizeMessage: Einmal-Medien, die live ohne Inhalt eintreffen', () 
     const m = msgOf(live({ remoteJid: GROUP, participant: '491709999999:7@s.whatsapp.net' }))
     assert.equal(m.isGroup, true)
     assert.equal(m.senderJid, '491709999999@s.whatsapp.net')
-    assert.equal(m.text, PLACEHOLDER.viewOnce)
+    assert.equal(m.text, PLACEHOLDER.viewOnceUnavailable)
   })
 
   it('auch mit store_view_once bleibt es beim Hinweis (es gibt nichts zu speichern)', () => {
     const m = msgOf(live(), { ...noEnv, storeViewOnce: true })
-    assert.equal(m.text, PLACEHOLDER.viewOnce)
+    assert.equal(m.text, PLACEHOLDER.viewOnceUnavailable)
     assert.equal(m.media, undefined)
+    assert.equal(m.viewOnceProbe?.unavailable, true)
+  })
+
+  it('der Hinweis sagt, wo das Medium zu sehen ist, und behauptet nicht, waread habe es absichtlich nicht gespeichert', () => {
+    assert.match(PLACEHOLDER.viewOnceUnavailable, /nur auf dem Handy/)
+    assert.doesNotMatch(PLACEHOLDER.viewOnceUnavailable, /nicht gespeichert/)
   })
 
   it('ohne Markierung und ohne Inhalt bleibt es bei "ignoriert"', () => {
@@ -312,6 +319,7 @@ describe('normalizeMessage: Einmal-Medien, die live ohne Inhalt eintreffen', () 
     const m = msgOf(raw({ viewOnceMessageV2: { message: { imageMessage: { mediaKey: Buffer.from('k') } } } }))
     assert.equal(m.text, PLACEHOLDER.viewOnceKind.image)
     assert.ok(m.viewOnceProbe)
+    assert.equal(m.viewOnceProbe.unavailable, undefined, 'mit Inhalt ist die Nachricht nicht "unavailable"')
   })
 
   it('Markierung UND Inhalt: der Inhalt gilt (kein zweiter, allgemeiner Hinweis)', () => {

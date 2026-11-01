@@ -67,6 +67,8 @@ max_mb_forced = 500                        # größtes Medium, das „Medium jet
 # "viewonce_probe" (nur Ja/Nein, kein Inhalt). Erst dort nachsehen (journalctl -u waread-ingest -o cat | grep viewonce_probe),
 # dann einschalten. Mit true lädt der Ingest solche Medien bei Ankunft herunter (ein HTTPS-Abruf je Medium, wie bei jedem
 # Auto-Download); der Absender erwartet bei Einmal-Medien, dass nichts bleibt.
+# Live eintreffende Einmal-Medien bringen weder Datei noch Schlüssel mit (Journal: "unavailable":true, "has_key":false).
+# Für sie nützt der Schalter nichts; sie lassen sich nur in WhatsApp auf dem Handy öffnen.
 store_view_once = false
 # Profilbilder der Chats (docs/PROFILBILDER.md). Ab Werk aus. Mit true fragt der Ingest beim Öffnen eines Chats in der
 # Oberfläche bei WhatsApp nach dessen Profilbild, aber nur, wenn die letzte Abfrage für diesen Chat älter als

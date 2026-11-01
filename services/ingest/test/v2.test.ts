@@ -247,6 +247,7 @@ describe('MessageHandler: messages.update und Medien-Grund', () => {
     assert.match(line!, /"has_key":true/)
     assert.match(line!, /"has_direct_path":true/)
     assert.match(line!, /"stored":false/)
+    assert.match(line!, /"unavailable":false/)
     assert.ok(!env.lines.join('\n').includes(key.toString('base64')))
     assert.deepEqual(one(env.db, 'SELECT type, view_once FROM messages WHERE id = ?', 'v1'), { type: 'system', view_once: 1 })
     assert.equal(sink.jobs.length, 0)

@@ -15,7 +15,8 @@ function kindLabel(m: Message): string {
     case 'video': return m.viewOnce ? 'Einmal-Video' : 'Video';
     case 'audio': return m.viewOnce ? 'Einmal-Sprachnachricht' : 'Sprachnachricht';
     case 'document': return 'Dokument';
-    default: return 'Nachricht';
+    // A view-once message without a file is a plain hint row (type "other").
+    default: return m.viewOnce ? 'Einmal-Medium' : 'Nachricht';
   }
 }
 
@@ -49,7 +50,11 @@ export function openMessageSheet(m: Message): void {
   const who = m.fromMe ? 'Du' : m.senderName ?? 'Unbekannt';
   const notes: HTMLElement[] = [];
   if (m.deleted) notes.push(el('p', { class: 'muted small' }, `Vom Absender gelöscht${m.deletedAt ? ` (${formatDateTime(m.deletedAt)})` : ''}. waread zeigt die Nachricht weiter an.`));
-  if (m.viewOnce) notes.push(el('p', { class: 'muted small' }, 'Einmal-Nachricht: Der Absender wollte, dass sie nur einmal angesehen wird. Hier bleibt sie ansehbar, solange sie gespeichert ist.'));
+  // Without a file the view-once message is only a hint: WhatsApp sent the linked device no file and no key (live), or
+  // waread did not store it. Claiming "Hier bleibt sie ansehbar" would be wrong there.
+  if (m.viewOnce) notes.push(el('p', { class: 'muted small' }, hasFile
+    ? 'Einmal-Nachricht: Der Absender wollte, dass sie nur einmal angesehen wird. Hier bleibt sie ansehbar, solange sie gespeichert ist.'
+    : 'Einmal-Medium ohne Datei: waread hat die Datei nicht und kann sie nicht nachladen. Öffnen lässt es sich nur in WhatsApp auf dem Handy.'));
   if (isProtected && m.protectedAt) notes.push(el('p', { class: 'muted small' }, `Geschützt seit ${formatDateTime(m.protectedAt)}.`));
 
   handle.panel.replaceChildren(

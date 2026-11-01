@@ -131,11 +131,17 @@ export interface NormEnv {
  * verknuepfte Geraet liefert.
  */
 export interface ViewOnceProbe {
-  kind: 'image' | 'video' | 'voice' | 'other'
+  /** 'unknown': WhatsApp hat die Art nicht genannt (Einmal-Medium ohne Inhalt, siehe `unavailable`). */
+  kind: 'image' | 'video' | 'voice' | 'other' | 'unknown'
   hasKey: boolean
   hasDirectPath: boolean
   hasUrl: boolean
   hasSha: boolean
+  /**
+   * WhatsApp hat statt der Nachricht nur `<unavailable type="view_once"/>` geschickt: kein Inhalt, kein Medienschluessel.
+   * Dann kann weder waread noch die Bibliothek die Datei laden, auch nicht mit store_view_once.
+   */
+  unavailable?: boolean
 }
 
 export interface NormalizedMedia {
@@ -220,6 +226,11 @@ export type NormalizeResult =
 /** Platzhaltertexte fuer Nachrichten ohne darstellbaren Inhalt (Anzeigesprache: Deutsch). */
 export const PLACEHOLDER = {
   viewOnce: 'Einmal-Ansehen-Medium (nicht gespeichert)',
+  /**
+   * Einmal-Medium, das live ohne Inhalt eintraf (`<unavailable type="view_once"/>`). WhatsApp schickt dem verknuepften
+   * Geraet weder die Datei noch den Schluessel; ansehen laesst es sich nur in der WhatsApp-App auf dem Handy.
+   */
+  viewOnceUnavailable: 'Einmal-Medium (nur auf dem Handy zu öffnen)',
   viewOnceKind: {
     image: 'Einmal-Foto (nicht gespeichert)',
     video: 'Einmal-Video (nicht gespeichert)',
@@ -454,7 +465,12 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
 
   if (liveViewOnce) {
     // Die Art (Foto, Video, Sprachnachricht) nennt WhatsApp hier nicht; gespeichert wird nur der Hinweis.
-    return { kind: 'message', message: { ...base, type: 'system', text: PLACEHOLDER.viewOnce, viewOnce: true } }
+    // Die Probe haelt im Journal fest, dass weder Inhalt noch Schluessel ankamen (dagegen hilft kein Schalter).
+    const probe: ViewOnceProbe = { kind: 'unknown', hasKey: false, hasDirectPath: false, hasUrl: false, hasSha: false, unavailable: true }
+    return {
+      kind: 'message',
+      message: { ...base, type: 'system', text: PLACEHOLDER.viewOnceUnavailable, viewOnce: true, viewOnceProbe: probe },
+    }
   }
 
   // Geheimnis der Nachricht fuer eine spaetere verschluesselte Bearbeitung (nur fuer Text und Bildunterschriften sinnvoll).
@@ -1223,6 +1239,7 @@ export class MessageHandler {
         has_url: m.viewOnceProbe.hasUrl,
         has_sha: m.viewOnceProbe.hasSha,
         stored: m.media !== undefined,
+        unavailable: m.viewOnceProbe.unavailable === true,
       })
     }
 

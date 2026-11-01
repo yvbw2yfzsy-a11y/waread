@@ -189,10 +189,18 @@ describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => 
     })
     assert.deepEqual(one(env.db, 'SELECT type, text, view_once FROM messages WHERE id = ?', 'VO1'), {
       type: 'system',
-      text: 'Einmal-Ansehen-Medium (nicht gespeichert)',
+      text: 'Einmal-Medium (nur auf dem Handy zu öffnen)',
       view_once: 1,
     })
     assert.equal(one(env.db, 'SELECT COUNT(*) AS n FROM media').n, 0)
+    // Journal: die Probe zeigt, dass weder Inhalt noch Schluessel ankamen (vorher fehlte fuer diesen Fall jede Zeile).
+    const probe = env.lines.find((l) => l.includes('viewonce_probe'))
+    assert.ok(probe, 'viewonce_probe fehlt')
+    assert.match(probe, /"kind":"unknown"/)
+    assert.match(probe, /"has_key":false/)
+    assert.match(probe, /"stored":false/)
+    assert.match(probe, /"unavailable":true/)
+    assert.doesNotMatch(probe, /VO1|Anna|491/, 'keine Kennungen oder Namen im Journal')
     assert.equal(all(env.db, "SELECT 1 FROM events_outbox WHERE type = 'new_message'").length, 1)
     assert.deepEqual(lib.unexpectedCalls, [])
   })
