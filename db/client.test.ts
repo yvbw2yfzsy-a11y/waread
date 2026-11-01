@@ -10,25 +10,20 @@ import {
   renameChat,
   mergeChats,
   insertMessageIfNotExists,
-  updateMessageText,
   markMessageDeleted,
   applyMessageEdit,
-  listMessageVersions,
   setMessageProtected,
-  countProtected,
   enqueueCommand,
   listCommands,
   deleteCommand,
   setMediaStatus,
   markSeen,
   markPlayed,
-  searchMessages,
   getSetting,
   setSetting,
   deleteExpired,
   pushEvent,
   pullEventsSince,
-  pruneEvents,
   type Database,
   type NewMessage,
 } from './client.js';
@@ -64,7 +59,55 @@ function scalar(db: Database, sql: string, ...params: unknown[]): unknown {
   return db.prepare(sql).pluck().get(...params);
 }
 
-const ids = (hits: { id: string }[]): string[] => hits.map((h) => h.id);
+/**
+ * Treffer einer FTS-Abfrage im Suchindex (nur ids, neueste zuerst). Die Abfrage wird wie im Web-Dienst gebaut
+ * (queries.ts buildFtsQuery): jedes Wort als Phrase, das letzte zusaetzlich als Praefix. Die Suche selbst gehoert dem
+ * Web-Dienst; hier dient sie nur dazu, den Index und seine Trigger zu pruefen.
+ */
+function ftsIds(db: Database, input: string): string[] {
+  const tokens = input
+    .split(/\s+/)
+    .map((t) => t.replace(/"/g, ''))
+    .filter((t) => /[\p{L}\p{N}]/u.test(t));
+  if (tokens.length === 0) return [];
+  const match = tokens.map((t, i) => (i === tokens.length - 1 ? `"${t}"*` : `"${t}"`)).join(' ');
+  return db
+    .prepare(
+      `SELECT m.id FROM messages_fts f
+         JOIN messages_fts_map x ON x.fts_rowid = f.rowid
+         JOIN messages m ON m.id = x.message_id
+        WHERE messages_fts MATCH ?
+        ORDER BY m.wa_timestamp DESC, m.id DESC`,
+    )
+    .pluck()
+    .all(match) as string[];
+}
+
+/** Eingehende, noch nicht gesehene Nachrichten ("neu"), neueste zuerst. */
+function unseenIds(db: Database): string[] {
+  return db
+    .prepare("SELECT id FROM messages WHERE direction = 'in' AND seen_at IS NULL ORDER BY wa_timestamp DESC, id DESC")
+    .pluck()
+    .all() as string[];
+}
+
+/** Die media-Zeile einer Nachricht in der Form, in der die Tests sie vergleichen. */
+function mediaOf(db: Database, messageId: string): Record<string, unknown> | undefined {
+  return db
+    .prepare(
+      `SELECT status, file_path AS filePath, thumbnail_path AS thumbnailPath, mime_type AS mimeType,
+              size_bytes AS sizeBytes, duration_seconds AS durationSeconds
+         FROM media WHERE message_id = ?`,
+    )
+    .get(messageId) as Record<string, unknown> | undefined;
+}
+
+/** Fruehere Fassungen einer bearbeiteten Nachricht, aelteste zuerst. */
+function versionsOf(db: Database, messageId: string): unknown[] {
+  return db
+    .prepare('SELECT version, text, replaced_at AS replacedAt FROM message_versions WHERE message_id = ? ORDER BY version')
+    .all(messageId);
+}
 
 /** FTS-Index, Zuordnungstabelle und messages muessen gleich gross und intern konsistent sein. */
 function assertFtsConsistent(db: Database): void {
@@ -140,10 +183,10 @@ describe('Chats', () => {
     const db = freshDb();
     const m = msg({ text: 'irgendwas' });
     insertMessageIfNotExists(db, m);
-    assert.deepEqual(ids(searchMessages(db, 'familie')), [m.id]);
+    assert.deepEqual(ftsIds(db, 'familie'), [m.id]);
     upsertChat(db, { id: 'c1', name: 'Arbeit', isGroup: true, lastActivityAt: 2 });
-    assert.deepEqual(searchMessages(db, 'familie'), []);
-    assert.deepEqual(ids(searchMessages(db, 'arbeit')), [m.id]);
+    assert.deepEqual(ftsIds(db, 'familie'), []);
+    assert.deepEqual(ftsIds(db, 'arbeit'), [m.id]);
     assertFtsConsistent(db);
   });
 
@@ -161,8 +204,8 @@ describe('Chats', () => {
     assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats WHERE id = ?', 'gibt-es-nicht'), 0, 'legt nie einen Chat an');
     assert.equal(renameChat(db, 'c1', '  Beruf  '), true);
     assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c1'), 'Beruf', 'Leerraum am Rand entfaellt');
-    assert.deepEqual(searchMessages(db, 'arbeit'), []);
-    assert.deepEqual(ids(searchMessages(db, 'beruf')), [m.id], 'der Suchindex folgt (Trigger)');
+    assert.deepEqual(ftsIds(db, 'arbeit'), []);
+    assert.deepEqual(ftsIds(db, 'beruf'), [m.id], 'der Suchindex folgt (Trigger)');
     assertFtsConsistent(db);
   });
 
@@ -201,7 +244,7 @@ describe('Chats zusammenfuehren (dieselbe Person als LID und als Nummer)', () =>
   it('der Suchindex zeigt danach bei allen Nachrichten den Namen des Ziels', () => {
     const db = two();
     mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net');
-    assert.deepEqual(ids(searchMessages(db, 'wort1')), ['m1']);
+    assert.deepEqual(ftsIds(db, 'wort1'), ['m1']);
     assert.equal(scalar(db, "SELECT COUNT(*) FROM messages_fts WHERE chat_name = 'Anna'"), 3);
     assert.equal(scalar(db, "SELECT COUNT(*) FROM messages_fts WHERE chat_name = 'Anna (LID)'"), 0);
   });
@@ -306,15 +349,15 @@ describe('Einfuegen und Duplikate', () => {
     const db = freshDb();
     const m = msg({ text: 'altertext' });
     insertMessageIfNotExists(db, m);
-    assert.equal(updateMessageText(db, m.id, 'neuertext'), true);
-    assert.deepEqual(searchMessages(db, 'altertext'), []);
-    const [hit] = searchMessages(db, 'neuertext');
-    assert.equal(hit?.id, m.id);
-    assert.equal(hit?.edited, true);
-    assert.equal(hit?.deleted, false);
+    assert.equal(applyMessageEdit(db, m.id, 'neuertext').changed, true);
+    assert.deepEqual(ftsIds(db, 'altertext'), []);
+    assert.deepEqual(ftsIds(db, 'neuertext'), [m.id]);
+    const flags = (): unknown => db.prepare('SELECT edited, deleted FROM messages WHERE id = ?').get(m.id);
+    assert.deepEqual(flags(), { edited: 1, deleted: 0 });
     assert.equal(markMessageDeleted(db, m.id), true);
-    assert.equal(searchMessages(db, 'neuertext')[0]?.deleted, true);
-    assert.equal(updateMessageText(db, 'unbekannt', 'x'), false);
+    assert.deepEqual(flags(), { edited: 1, deleted: 1 });
+    assert.deepEqual(ftsIds(db, 'neuertext'), [m.id], 'Text bleibt im Index, auch wenn die Nachricht als geloescht markiert ist');
+    assert.equal(applyMessageEdit(db, 'unbekannt', 'x').changed, false);
     assert.equal(markMessageDeleted(db, 'unbekannt'), false);
     assertFtsConsistent(db);
   });
@@ -328,8 +371,7 @@ describe('Medien', () => {
     setMediaStatus(db, m.id, { status: 'downloading' });
     setMediaStatus(db, m.id, { status: 'ready', filePath: '/m/a.ogg', mimeType: 'audio/ogg', sizeBytes: 321, durationSeconds: 4.5 });
     setMediaStatus(db, m.id, { thumbnailPath: '/m/a.png' });
-    const media = searchMessages(db, '', { type: 'voice' })[0]?.media;
-    assert.deepEqual(media, {
+    assert.deepEqual(mediaOf(db, m.id), {
       status: 'ready',
       filePath: '/m/a.ogg',
       thumbnailPath: '/m/a.png',
@@ -346,7 +388,7 @@ describe('Medien', () => {
     const t2 = msg({ text: 'Notiz' });
     insertMessageIfNotExists(db, t2);
     setMediaStatus(db, t2.id, { filePath: '/m/c1/z/Zeugnis_2026.pdf' });
-    assert.deepEqual(ids(searchMessages(db, 'zeugnis')), [t2.id]);
+    assert.deepEqual(ftsIds(db, 'zeugnis'), [t2.id]);
     assert.throws(() => setMediaStatus(db, 'unbekannt', { status: 'ready' }), /existiert nicht/);
     assert.throws(
       () => setMediaStatus(db, m.id, { status: 'kaputt' as 'ready' }),
@@ -359,30 +401,19 @@ describe('Medien', () => {
   });
 });
 
-describe('Suche', () => {
+describe('Suchindex (FTS-Trigger)', () => {
   it('findet Text; Umlaute, Gross-/Kleinschreibung und Praefix (letztes Wort) werden toleriert', () => {
     const db = freshDb();
     const a = msg({ text: 'Urlaubsplanung bei Familie Müller' });
     const b = msg({ text: 'Einkaufsliste für morgen' });
     insertMessageIfNotExists(db, a);
     insertMessageIfNotExists(db, b);
-    assert.deepEqual(ids(searchMessages(db, 'müller')), [a.id]);
-    assert.deepEqual(ids(searchMessages(db, 'MULLER')), [a.id]);
-    assert.deepEqual(ids(searchMessages(db, 'urlaubsp')), [a.id]);
-    assert.deepEqual(ids(searchMessages(db, 'urlaubsplanung muller')), [a.id]); // UND
-    assert.deepEqual(searchMessages(db, 'urlaubsplanung einkaufsliste'), []);
-    assert.deepEqual(ids(searchMessages(db, 'fur')), [b.id]); // "für" ohne Umlaut
-  });
-
-  it('Sonderzeichen in der Eingabe loesen keinen FTS-Syntaxfehler aus', () => {
-    const db = freshDb();
-    insertMessageIfNotExists(db, msg({ text: 'it works' }));
-    for (const q of ['"', 'foo AND', 'NEAR(', 'a:b', '-x', "it's", '(', 'OR', 'x*', 'a" b', 'text:works']) {
-      assert.doesNotThrow(() => searchMessages(db, q), `Eingabe ${JSON.stringify(q)}`);
-    }
-    // keine Buchstaben/Ziffern => leer, nicht "alles"
-    assert.deepEqual(searchMessages(db, '*'), []);
-    assert.deepEqual(searchMessages(db, '😀'), []);
+    assert.deepEqual(ftsIds(db, 'müller'), [a.id]);
+    assert.deepEqual(ftsIds(db, 'MULLER'), [a.id]);
+    assert.deepEqual(ftsIds(db, 'urlaubsp'), [a.id]);
+    assert.deepEqual(ftsIds(db, 'urlaubsplanung muller'), [a.id]); // UND
+    assert.deepEqual(ftsIds(db, 'urlaubsplanung einkaufsliste'), []);
+    assert.deepEqual(ftsIds(db, 'fur'), [b.id]); // "für" ohne Umlaut
   });
 
   it('durchsucht caption, filename (nur Basename), chat_name und sender_name', () => {
@@ -396,34 +427,12 @@ describe('Suche', () => {
     // Spaltenbelegung: Bildunterschrift steht in caption, nicht in text
     assert.equal(scalar(db, "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'caption : sonnenuntergang'"), 1);
     assert.equal(scalar(db, "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'text : sonnenuntergang'"), 0);
-    assert.deepEqual(ids(searchMessages(db, 'sonnenuntergang')), [img.id]);
-    assert.deepEqual(ids(searchMessages(db, 'rechnung')), [img.id]);
-    assert.deepEqual(searchMessages(db, 'waread'), []); // Verzeichnisname gehoert nicht in den Index
-    assert.deepEqual(ids(searchMessages(db, 'familie')), [img.id]); // chat_name
-    assert.deepEqual(ids(searchMessages(db, '4915112345678')), [img.id]); // sender_name
+    assert.deepEqual(ftsIds(db, 'sonnenuntergang'), [img.id]);
+    assert.deepEqual(ftsIds(db, 'rechnung'), [img.id]);
+    assert.deepEqual(ftsIds(db, 'waread'), []); // Verzeichnisname gehoert nicht in den Index
+    assert.deepEqual(ftsIds(db, 'familie'), [img.id]); // chat_name
+    assert.deepEqual(ftsIds(db, '4915112345678'), [img.id]); // sender_name
     assertFtsConsistent(db);
-  });
-
-  it('Filter chatId, type, from/to, onlyNew, limit; blanke Anfrage listet neueste zuerst', () => {
-    const db = freshDb();
-    upsertChat(db, { id: 'c2', name: 'Anna', isGroup: false, lastActivityAt: 1 });
-    const a = msg({ text: 'eins' });
-    const b = msg({ text: 'zwei', type: 'voice' });
-    const c = msg({ text: 'drei', chatId: 'c2' });
-    const d = msg({ text: 'vier', direction: 'out' });
-    for (const m of [a, b, c, d]) insertMessageIfNotExists(db, m);
-
-    assert.deepEqual(ids(searchMessages(db, '')), [d.id, c.id, b.id, a.id]);
-    assert.deepEqual(ids(searchMessages(db, '   ', { chatId: 'c1' })), [d.id, b.id, a.id]);
-    assert.deepEqual(ids(searchMessages(db, '', { type: 'voice' })), [b.id]);
-    assert.deepEqual(ids(searchMessages(db, '', { from: b.waTimestamp, to: c.waTimestamp })), [c.id, b.id]);
-    assert.deepEqual(ids(searchMessages(db, '', { onlyNew: true })), [c.id, b.id, a.id]); // 'out' ist nie neu
-    assert.deepEqual(ids(searchMessages(db, '', { limit: 2 })), [d.id, c.id]);
-    assert.deepEqual(ids(searchMessages(db, 'drei', { chatId: 'c1' })), []);
-    assert.deepEqual(ids(searchMessages(db, 'drei', { chatId: 'c2' })), [c.id]);
-    const hit = searchMessages(db, 'drei')[0];
-    assert.equal(hit?.chatName, 'Anna');
-    assert.equal(hit?.isGroup, false);
   });
 });
 
@@ -438,9 +447,9 @@ describe('Neu und angehoert', () => {
 
     assert.deepEqual(markSeen(db, { chatId: 'c1', upTo: m2.id }), [m1.id, m2.id]);
     assert.deepEqual(markSeen(db, { chatId: 'c1', upTo: m2.id }), []);
-    assert.deepEqual(ids(searchMessages(db, '', { onlyNew: true })), [m3.id]);
+    assert.deepEqual(unseenIds(db), [m3.id]);
     assert.deepEqual(markSeen(db, { chatId: 'c1', all: true }), [m3.id]);
-    assert.deepEqual(searchMessages(db, '', { onlyNew: true }), []);
+    assert.deepEqual(unseenIds(db), []);
     assert.equal(scalar(db, 'SELECT seen_at FROM messages WHERE id = ?', out.id), null);
     assert.notEqual(scalar(db, 'SELECT seen_at FROM messages WHERE id = ?', m1.id), null);
     assert.deepEqual(markSeen(db, { chatId: 'c1', upTo: 'gibt-es-nicht' }), []);
@@ -455,7 +464,7 @@ describe('Neu und angehoert', () => {
     insertMessageIfNotExists(db, a);
     insertMessageIfNotExists(db, b);
     assert.deepEqual(markSeen(db, { chatId: 'c1', all: true }), [a.id]);
-    assert.deepEqual(ids(searchMessages(db, '', { onlyNew: true })), [b.id]);
+    assert.deepEqual(unseenIds(db), [b.id]);
     assert.deepEqual(markSeen(db, { chatId: 'c1', upTo: b.id }), []); // b liegt in c2
   });
 
@@ -491,16 +500,16 @@ describe('Aufbewahrung (deleteExpired)', () => {
     assert.equal(scalar(db, 'SELECT count(*) FROM messages'), 2);
     assert.equal(scalar(db, 'SELECT count(*) FROM media'), 1);
 
-    const media = searchMessages(db, '', { type: 'voice' })[0]?.media;
+    const media = mediaOf(db, mid.id);
     assert.equal(media?.status, 'expired');
     assert.equal(media?.filePath, null);
     assert.equal(media?.thumbnailPath, null);
     assert.equal(media?.mimeType, 'audio/ogg'); // Metadaten bleiben
     assert.equal(media?.durationSeconds, 12.5);
 
-    assert.deepEqual(ids(searchMessages(db, 'frischer')), [fresh.id]);
-    assert.deepEqual(searchMessages(db, 'altes'), []);
-    assert.deepEqual(searchMessages(db, 'alter'), []);
+    assert.deepEqual(ftsIds(db, 'frischer'), [fresh.id]);
+    assert.deepEqual(ftsIds(db, 'altes'), []);
+    assert.deepEqual(ftsIds(db, 'alter'), []);
     assertFtsConsistent(db);
 
     // zweiter Lauf: nichts mehr zu tun
@@ -515,10 +524,10 @@ describe('Aufbewahrung (deleteExpired)', () => {
     const m = msg({ type: 'document', text: 'Dokument', waTimestamp: 500 });
     insertMessageIfNotExists(db, m);
     setMediaStatus(db, m.id, { status: 'ready', filePath: '/m/c1/x/Mietvertrag.pdf' });
-    assert.deepEqual(ids(searchMessages(db, 'mietvertrag')), [m.id]);
+    assert.deepEqual(ftsIds(db, 'mietvertrag'), [m.id]);
     deleteExpired(db, { messagesBefore: 100, mediaBefore: 1000 });
-    assert.deepEqual(searchMessages(db, 'mietvertrag'), []);
-    assert.deepEqual(ids(searchMessages(db, 'dokument')), [m.id]); // Nachricht selbst bleibt
+    assert.deepEqual(ftsIds(db, 'mietvertrag'), []);
+    assert.deepEqual(ftsIds(db, 'dokument'), [m.id]); // Nachricht selbst bleibt
     assertFtsConsistent(db);
   });
 
@@ -535,9 +544,9 @@ describe('Aufbewahrung (deleteExpired)', () => {
       deleteExpired(db, { messagesBefore: 110, mediaBefore: 110 }); // entfernt die ersten 10
       db.exec('VACUUM');
       assertFtsConsistent(db);
-      assert.equal(searchMessages(db, 'gemeinsam').length, 10);
-      assert.deepEqual(ids(searchMessages(db, 'nachricht15')), [ms[15]!.id]);
-      assert.deepEqual(searchMessages(db, 'nachricht5'), []); // geloescht
+      assert.equal(ftsIds(db, 'gemeinsam').length, 10);
+      assert.deepEqual(ftsIds(db, 'nachricht15'), [ms[15]!.id]);
+      assert.deepEqual(ftsIds(db, 'nachricht5'), []); // geloescht
       db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -562,7 +571,7 @@ describe('Einstellungen und Events', () => {
     assert.equal(getSetting(db, 'retention_days'), '7');
   });
 
-  it('pushEvent/pullEventsSince: Reihenfolge, Payload-Roundtrip, Inkrement; pruneEvents raeumt auf', () => {
+  it('pushEvent/pullEventsSince: Reihenfolge, Payload-Roundtrip, Inkrement; geloeschte ids werden nie wiederverwendet', () => {
     const db = freshDb();
     pushEvent(db, 'message', { chatId: 'c1', n: 1 });
     pushEvent(db, 'chat_updated', null);
@@ -576,8 +585,8 @@ describe('Einstellungen und Events', () => {
     assert.deepEqual(pullEventsSince(db, all[1]!.id).map((e) => e.id), [all[2]!.id]);
     assert.deepEqual(pullEventsSince(db, all[2]!.id), []);
 
-    assert.equal(pruneEvents(db, 0), 0);
-    assert.equal(pruneEvents(db, Math.floor(Date.now() / 1000) + 60), 3);
+    // Der Web-Dienst leert die Tabelle mit eigenem SQL (sse.ts); AUTOINCREMENT sorgt dafuer, dass ids nie zurueckkehren.
+    db.prepare('DELETE FROM events_outbox').run();
     assert.deepEqual(pullEventsSince(db, 0), []);
     pushEvent(db, 'message', undefined); // undefined wird zu null
     const after = pullEventsSince(db, 0);
@@ -611,7 +620,7 @@ describe('Version 2: Versionen, Loeschmarke, Schild, Befehle, Zitat-Kurztext', (
     assert.deepEqual(row, { p: null, v: 0, e: null, r: null });
     const md = db.prepare("SELECT status, skip_reason AS s, loadable AS l FROM media WHERE message_id = 'old'").get() as Record<string, unknown>;
     assert.deepEqual(md, { status: 'ready', s: null, l: 0 });
-    assert.equal(searchMessages(db, 'hallo').length, 1);
+    assert.equal(ftsIds(db, 'hallo').length, 1);
     assertFtsConsistent(db);
   });
 
@@ -623,15 +632,15 @@ describe('Version 2: Versionen, Loeschmarke, Schild, Befehle, Zitat-Kurztext', (
     assert.deepEqual(applyMessageEdit(db, m.id, 'zweite Fassung', 2_000_001), { changed: false, version: 0 });
     assert.deepEqual(applyMessageEdit(db, m.id, 'dritte Fassung', 2_000_100), { changed: true, version: 2 });
     assert.deepEqual(applyMessageEdit(db, 'unbekannt', 'x'), { changed: false, version: 0 });
-    assert.deepEqual(listMessageVersions(db, m.id), [
+    assert.deepEqual(versionsOf(db, m.id), [
       { version: 1, text: 'erste Fassung', replacedAt: 2_000_000 },
       { version: 2, text: 'zweite Fassung', replacedAt: 2_000_100 },
     ]);
     const row = db.prepare('SELECT text, edited, edited_at AS at FROM messages WHERE id = ?').get(m.id) as Record<string, unknown>;
     assert.deepEqual(row, { text: 'dritte Fassung', edited: 1, at: 2_000_100 });
     // Der Suchindex kennt nur den aktuellen Text
-    assert.equal(searchMessages(db, 'dritte').length, 1);
-    assert.equal(searchMessages(db, 'erste').length, 0);
+    assert.equal(ftsIds(db, 'dritte').length, 1);
+    assert.equal(ftsIds(db, 'erste').length, 0);
     assertFtsConsistent(db);
   });
 
@@ -684,14 +693,14 @@ describe('Version 2: Versionen, Loeschmarke, Schild, Befehle, Zitat-Kurztext', (
     assert.equal(setMessageProtected(db, keep.id, true, 500), true);
     assert.equal(setMessageProtected(db, keep.id, true, 900), true);
     assert.equal(scalar(db, 'SELECT protected_at FROM messages WHERE id = ?', keep.id), 500, 'Zeitpunkt bleibt');
-    assert.deepEqual(countProtected(db), { messages: 1, mediaBytes: 0 });
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM messages WHERE protected_at IS NOT NULL'), 1);
 
     const res = deleteExpired(db, { messagesBefore: 10_000, mediaBefore: 10_000 });
     assert.deepEqual(res.deletedMessageIds, [gone.id]);
     assert.deepEqual(res.mediaPathsToDelete, ['/m/gone.jpg']);
     assert.equal(scalar(db, 'SELECT count(*) FROM messages WHERE id = ?', keep.id), 1);
     assert.equal(scalar(db, "SELECT status FROM media WHERE message_id = ?", keep.id), 'ready', 'Medium geschuetzt');
-    assert.equal(listMessageVersions(db, keep.id).length, 1);
+    assert.equal(versionsOf(db, keep.id).length, 1);
     assertFtsConsistent(db);
 
     // Schild entfernen: beim naechsten Lauf verschwindet sie

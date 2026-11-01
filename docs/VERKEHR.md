@@ -72,3 +72,7 @@ Stand: 29. Oktober 2026. Keine der Änderungen sendet einen neuen Knoten über d
 Keine Funktion von 0.2.1 sendet etwas oder fragt etwas an. Verschlüsselte Bearbeitungen werden lokal entschlüsselt (Geheimnis der Originalnachricht aus dem privaten Speicher), die LID-Zuordnung wird aus dem lokalen Schlüsselspeicher gelesen, Chats werden lokal zusammengeführt, Namen lokal nachgezogen. Das Lesen von Nachrichtenbytes (`decodeMessage` in `waLib.ts`) hat kein Netzwerk. Der Wächter `check:no-send` ist unverändert. Siehe `docs/RELEASE-0.2.1.md`.
 
 Für Einmal-Medien ohne Zweitnummer: Stufe 1 (nur lesen, kein Verkehr) zuerst auswerten (`docs/VERSION2.md`, Abschnitt 3), bevor der Schalter eingeschaltet wird. Mit der Testinstanz und dem Knotenzähler (`count_outgoing_nodes`) lässt sich zusätzlich messen, ob dabei etwas anderes als der HTTPS-Abruf ausgesendet wird.
+
+### Version 0.2.2: was dazukommt
+
+Nichts. 0.2.2 entfernt Code und korrigiert die Anzeige des Zitats einer Umfrage; keine Anfrage und kein Knoten kommt hinzu oder fällt weg. Der Wächter `check:no-send` ist unverändert grün, die Hülle `waLib.ts` ist unverändert. Siehe `docs/RELEASE-0.2.2.md`.

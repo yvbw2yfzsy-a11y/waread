@@ -161,7 +161,7 @@ und räumt alle 10 Minuten zurückgestellte Schlüssel auf (Nachricht weg oder M
 
 ## 7. Anbindung an `db/client.ts`
 
-`src/dbClient.ts` ist eine dünne Schicht über dem gemeinsamen Workspace-Paket `@waread/db` (`db/client.ts`): Es re-exportiert `openDb`, `runMigrations`, `upsertChat`, `insertMessageIfNotExists`, `setMediaStatus`, `getSetting`, `setSetting`, `pushEvent` samt Typen. Alle anderen Module des Ingest importieren die Datenbank nur von dort. Schema, Migrationen und die Suchindex-Trigger kommen aus `db/` und werden nicht mehr im Ingest nachgebaut. Drei Hilfen stehen zusätzlich in `dbClient.ts`, weil sie nicht im Vertrag stehen und reines SQL gegen die Vertragstabellen sind: `ensureMediaRow`, `listMediaIdsByStatus`, `messageExists`.
+`src/dbClient.ts` ist eine dünne Schicht über dem gemeinsamen Workspace-Paket `@waread/db` (`db/client.ts`): Es re-exportiert `openDb`, `runMigrations`, `upsertChat`, `insertMessageIfNotExists`, `setMediaStatus`, `getSetting`, `setSetting`, `pushEvent` samt Typen. Alle anderen Module des Ingest importieren die Datenbank nur von dort. Schema, Migrationen und die Suchindex-Trigger kommen aus `db/` und werden nicht mehr im Ingest nachgebaut. Vier Hilfen stehen zusätzlich in `dbClient.ts`, weil sie nicht im Vertrag stehen und reines SQL gegen die Vertragstabellen sind: `listMediaIdsByStatus`, `messageExists`, `isMessageProtected`, `listLoadableMediaIds`.
 
 **Suchindex:** `messages_fts` wird von Triggern in `db/schema.sql` über die Zuordnungstabelle `messages_fts_map` gepflegt. Der Ingest schreibt oder löscht keine FTS-Zeilen von Hand (der frühere Umgang mit verwaisten Zeilen ist entfallen).
 
@@ -197,7 +197,7 @@ und räumt alle 10 Minuten zurückgestellte Schlüssel auf (Nachricht weg oder M
 
 ## 9. Konfiguration (`/etc/waread/config.toml`, überschreibbar mit `WAREAD_CONFIG`)
 
-Maßgeblich ist `config/config.example.toml` im Projektordner (Abschnitte `[paths]`, `[retention]`, `[ingest]`); die Standardwerte stehen in `src/config.ts` (`defaultConfig`). Fehlt die Datei, gelten die Standardwerte. Unbekannte Abschnitte (anderer Dienste, `[update]`) werden ignoriert, ungültige Werte brechen den Start mit klarer Meldung ab (der Dateiinhalt wird nicht zitiert). Standardgrenzen für Downloads: Bild 10 MB, Sprachnachricht 10 MB, Video 50 MB, Dokument 20 MB; Videos werden standardmäßig nicht automatisch geladen. `tmp_dir` wird vom Ingest nicht benutzt (Teildateien liegen als `.part` neben dem Ziel). `[retention]` ist nur der Rückfall des Ingest, wenn in `settings` nichts steht.
+Maßgeblich ist `config/config.example.toml` im Projektordner (Abschnitte `[paths]`, `[retention]`, `[ingest]`); die Standardwerte stehen in `src/config.ts` (`defaultConfig`). Fehlt die Datei, gelten die Standardwerte. Unbekannte Abschnitte (anderer Dienste, `[update]`) werden ignoriert, ungültige Werte brechen den Start mit klarer Meldung ab (der Dateiinhalt wird nicht zitiert). Standardgrenzen für Downloads: Bild 10 MB, Sprachnachricht 10 MB, Video 50 MB, Dokument 20 MB; Videos werden standardmäßig nicht automatisch geladen. `[retention]` ist nur der Rückfall des Ingest, wenn in `settings` nichts steht.
 
 ---
 

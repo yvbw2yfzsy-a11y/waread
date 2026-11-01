@@ -7,7 +7,6 @@
 import { SETTING_KEYS, type IngestConfig, type MediaKind } from './config.js'
 import {
   applyMessageEdit,
-  ensureMediaRow,
   getSetting,
   insertMessageIfNotExists,
   markMessageDeleted,
@@ -259,6 +258,15 @@ function unwrap(content: any): { content: any; viewOnce: boolean } {
   return { content, viewOnce }
 }
 
+/** Umfragen: WhatsApp hat das Feld mehrfach neu aufgelegt; alle Fassungen werden gleich behandelt. */
+const POLL_KEYS = [
+  'pollCreationMessage',
+  'pollCreationMessageV2',
+  'pollCreationMessageV3',
+  'pollCreationMessageV4',
+  'pollCreationMessageV5',
+] as const
+
 /** Reihenfolge, in der der "eigentliche" Inhaltstyp gesucht wird. */
 const CONTENT_TYPES = [
   'conversation',
@@ -273,11 +281,7 @@ const CONTENT_TYPES = [
   'liveLocationMessage',
   'contactMessage',
   'contactsArrayMessage',
-  'pollCreationMessage',
-  'pollCreationMessageV2',
-  'pollCreationMessageV3',
-  'pollCreationMessageV4',
-  'pollCreationMessageV5',
+  ...POLL_KEYS,
 ] as const
 
 /**
@@ -358,9 +362,9 @@ function quotedFrom(ctx: any, env: NormEnv): { text?: string; sender?: string; t
   } else if (content?.contactMessage || content?.contactsArrayMessage) {
     type = 'text'
     text = '👤 Kontakt'
-  } else if (content?.pollCreationMessage || content?.pollCreationMessageV2 || content?.pollCreationMessageV3) {
+  } else if (POLL_KEYS.some((k) => content?.[k])) {
     type = 'text'
-    const poll = content.pollCreationMessage ?? content.pollCreationMessageV2 ?? content.pollCreationMessageV3
+    const poll = POLL_KEYS.map((k) => content[k]).find(Boolean)
     text = `📊 Umfrage: ${str(poll?.name) ?? ''}`.trim()
   }
   let sender: string | undefined
@@ -1250,7 +1254,7 @@ export class MessageHandler {
       if (!inserted) return { inserted: false, job: null, deferred: null }
 
       if (m.media) {
-        ensureMediaRow(this.db, m.id)
+        // Die media-Zeile legt insertMessageIfNotExists schon an (status 'pending'); setMediaStatus setzt sie fort.
         // Verlaufsmedien werden nicht geladen, bleiben aber auf Wunsch ladbar (Schluessel im privaten Speicher),
         // solange die Medien-Aufbewahrung nicht abgelaufen ist. Abgelaufene sind endgueltig weg.
         const mediaExpired = this.isExpired(m.waTimestamp, 'media')

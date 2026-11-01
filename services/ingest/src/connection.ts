@@ -21,10 +21,6 @@ import { nextBackoffMs, realScheduler, statusCodeOf, type Scheduler } from './ti
 import type { AuthStore } from './authStore.js'
 import type { WaLib, WaSocket } from './waLib.js'
 
-// Backoff und Fehlercode-Hilfen liegen in timing.ts; hier erneut exportiert, weil die Reconnect-Logik
-// fachlich zu diesem Modul gehoert.
-export { nextBackoffMs, statusCodeOf, type BackoffOptions, type Scheduler } from './timing.js'
-
 // ---------------------------------------------------------------------------------------------
 // Klassifikation von Verbindungsabbruechen
 // ---------------------------------------------------------------------------------------------

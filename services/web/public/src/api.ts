@@ -11,7 +11,7 @@ import type {
   MessageType, MessageVersions, QuotedRef, SearchFilters, SearchHit, Settings, StatusInfo, StorageUsage, ConnState,
 } from './types';
 import { chatName } from './chatLabel';
-import { noteTimestampUnit, toApiTs } from './util';
+import { isObj, noteTimestampUnit, toApiTs } from './util';
 
 /**
  * Prefix for all server URLs. Empty = relative to the page, so the app works
@@ -86,7 +86,6 @@ async function json(method: string, path: string, body?: unknown): Promise<unkno
 // ---------------------------------------------------------------------------
 
 type Raw = Record<string, unknown>;
-const isObj = (v: unknown): v is Raw => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' ? v : typeof v === 'number' ? String(v) : undefined;
 const num = (v: unknown): number | undefined => {

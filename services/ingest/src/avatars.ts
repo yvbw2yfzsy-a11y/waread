@@ -24,6 +24,7 @@ import path from 'node:path'
 import type { IngestConfig } from './config.js'
 import { getSetting, pushEvent, setSetting, type Database } from './dbClient.js'
 import { errorFields, type Logger } from './log.js'
+import { nowSec } from './sqlite.js'
 import { realScheduler, type Scheduler } from './timing.js'
 
 /** Schluessel in der settings-Tabelle: { "<chat-id>": <Unix-Sekunden der letzten Abfrage> }. */
@@ -89,7 +90,7 @@ export class AvatarSync {
   constructor(deps: AvatarDeps) {
     this.d = deps
     this.sched = deps.scheduler ?? realScheduler
-    this.now = deps.now ?? (() => Math.floor(Date.now() / 1000))
+    this.now = deps.now ?? nowSec
   }
 
   start(): void {

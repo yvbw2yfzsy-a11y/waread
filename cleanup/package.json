@@ -1,6 +1,6 @@
 {
   "name": "waread-cleanup",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "waread: Aufräum-Dienst (Aufbewahrungsfristen, verwaiste Dateien, WAL-Checkpoint, VACUUM)",
   "type": "module",
@@ -18,10 +18,6 @@
   },
   "dependencies": {
     "@waread/db": "*",
-    "better-sqlite3": "^12.0.0",
     "smol-toml": "^1.6.1"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0"
   }
 }

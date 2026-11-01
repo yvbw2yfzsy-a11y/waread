@@ -8,8 +8,8 @@ ausschliesslich über `client.ts` auf die Datenbank zu.
 |---|---|
 | `schema.sql` | Vollständiges Schema (Version 1) inkl. Indizes und FTS-Trigger. Version 2 steht als Migration in `migrate.ts` (nur `ADD COLUMN` und neue Tabellen) |
 | `migrate.ts` | `runMigrations()`, `user_version`-basiert, idempotent, sicher bei parallelem Start |
-| `client.ts` | Alle Funktionen des Vertrags plus drei benannte Erweiterungen (siehe unten) |
-| `client.test.ts` | 34 Tests (`node:test`) |
+| `client.ts` | Die Funktionen, die Ingest, Web und Cleanup benutzen, plus Erweiterungen (siehe unten) |
+| `client.test.ts` | 41 Tests (`node:test`) |
 | `package.json`, `tsconfig*.json` | Eigenständig testbar / baubar |
 
 ## Setup
@@ -18,7 +18,7 @@ ausschliesslich über `client.ts` auf die Datenbank zu.
 
 ```bash
 npm install                    # better-sqlite3 ist ein natives Modul
-npm test -w @waread/db         # tsx --test client.test.ts, 34 Tests
+npm test -w @waread/db         # tsx --test client.test.ts, 41 Tests
 npm run typecheck -w @waread/db
 npm run build -w @waread/db    # nach db/dist/ (client.js, migrate.js, Typen)
 ```
@@ -33,7 +33,7 @@ npm run build -w @waread/db    # nach db/dist/ (client.js, migrate.js, Typen)
 
 ```ts
 import { openDb, runMigrations, upsertChat, insertMessageIfNotExists,
-         searchMessages, markSeen, deleteExpired } from '@waread/db';
+         markSeen, deleteExpired } from '@waread/db';
 
 const db = openDb('/var/lib/waread/db/waread.db'); // WAL, foreign_keys=ON, busy_timeout 5 s
 runMigrations(db);                                  // jeder Dienst beim Start; parallel unkritisch
@@ -41,7 +41,6 @@ runMigrations(db);                                  // jeder Dienst beim Start; 
 upsertChat(db, { id: chatJid, name: 'Familie', isGroup: true, lastActivityAt: ts });
 const isNew = insertMessageIfNotExists(db, { /* ... */ }); // false = Duplikat
 
-const hits = searchMessages(db, 'urlaub', { chatId, onlyNew: true });
 const seenIds = markSeen(db, { chatId, upTo: lastVisibleMessageId });
 
 // Beispiel für den Vertrag (der Cleanup-Dienst selbst löscht mit eigenem SQL, erst Dateien, dann DB;
@@ -64,11 +63,10 @@ const { deletedMessageIds, mediaPathsToDelete } =
 - **Neu/angehört:** `markSeen` betrifft nur **eingehende** Nachrichten; `upTo` vergleicht nach
   `wa_timestamp` (Nachrichten mit gleichem Zeitstempel werden mitmarkiert). Ohne `all` und `upTo` wirft die Funktion.
   `markPlayed` behält den ersten Zeitpunkt.
-- **Suche:** Eingabe wird quotiert (FTS-Operatoren wie `AND`, `-`, `:` werden zu Text), mehrere
-  Wörter = UND, das letzte Wort ist Präfix. Umlaute/Akzente und Groß-/Kleinschreibung werden
-  ignoriert (`muller` findet `Müller`); **`ß` wird nicht zu `ss` gefaltet** (geprüft). Neueste
-  Treffer zuerst, Standard 100, maximal 1000. Leere Anfrage = nur Filter; Anfrage ohne ein
-  Wort aus Buchstaben/Ziffern (z. B. nur `*` oder ein Emoji) = leeres Ergebnis.
+- **Suche:** Die Suchabfrage baut der Web-Dienst (`services/web/src/queries.ts`, `buildFtsQuery` und `searchMessages`);
+  dieses Paket liefert nur den Index und seine Trigger. Der Index ignoriert Umlaute/Akzente und
+  Groß-/Kleinschreibung (`muller` findet `Müller`); **`ß` wird nicht zu `ss` gefaltet** (geprüft).
+  Die Tests prüfen Index und Trigger mit einer kleinen Hilfsfunktion im Test selbst.
 - **FTS-Spalten:** `text` bei text/voice/system, `caption` bei image/video/document (dort ist
   `messages.text` die Bildunterschrift), `filename` = Basename von `media.file_path`,
   `chat_name` = `chats.name`, `sender_name` = `messages.sender`. Gepflegt per Trigger, also auch
@@ -87,17 +85,12 @@ const { deletedMessageIds, mediaPathsToDelete } =
 
 Alle additiv; die Vertragssignaturen sind unverändert.
 
-- `updateMessageText(db, id, text)`: Bearbeitung, setzt `edited=1` (Index folgt per Trigger).
 - `markMessageDeleted(db, id)`: setzt `deleted=1`. **Text und Medien bleiben erhalten**; ob die
   Oberfläche sie zeigt, ist eine Produktentscheidung, die hier nicht getroffen wurde.
-- `pruneEvents(db, olderThan)`: räumt `events_outbox`. Der Vertrag sagt, der Web-Dienst leere alte
-  Zeilen, nennt aber keine Funktion dafür. `ids` werden dank `AUTOINCREMENT` nie wiederverwendet.
-- `searchMessages`-Filter `limit` (siehe oben).
+- `events_outbox` leert der Web-Dienst mit eigenem SQL (`services/web/src/sse.ts`); `ids` werden dank `AUTOINCREMENT` nie wiederverwendet.
 
 ## Lücken, die ich bewusst offen lasse
 
-- **Rückgabeform von `searchMessages`:** Im Vertrag nur `any[]`. Geliefert wird `MessageHit[]`
-  (camelCase, `media` als verschachteltes Objekt oder `null`, Flags als Booleans), Typ in `client.ts`.
 - **Keine Lesefunktionen für Chatliste, Verlaufs-Paging, Neu-Zähler pro Chat oder Medienpfad-Abfrage**
   im Vertrag. Der Web-Dienst hat dafür eigenes SQL (`services/web/src/queries.ts`).
 - **`filename`** stammt aus dem Speicherpfad, nicht aus dem Originalnamen eines Dokuments; der ist im Vertrag nicht vorgesehen.
@@ -128,7 +121,7 @@ Der Index kostet zusätzlichen Speicher und Schreibaufwand auf dem Pi.
 
 ## Teststatus (ehrlich)
 
-- Die 34 Tests laufen grün (inzwischen mit dem echten `better-sqlite3`; der folgende Absatz beschreibt den Stand beim Erstellen), **aber nicht gegen echtes better-sqlite3**: die npm-Registry war in der
+- Die 41 Tests laufen grün (inzwischen mit dem echten `better-sqlite3`; der folgende Absatz beschreibt den Stand beim Erstellen), **aber nicht gegen echtes better-sqlite3**: die npm-Registry war in der
   Entwicklungsumgebung gesperrt. Stattdessen lief der Code gegen ein lokales Ersatzpaket `better-sqlite3` (`0.0.0-test-shim`, nur Testwerkzeug, nicht Teil des Projekts), das die
   genutzte better-sqlite3-API auf Node `node:sqlite` abbildet (echtes SQLite 3.53.4 mit FTS5). SQL, Trigger,
   Transaktionslogik und Suche sind damit real geprüft. **Nicht geprüft** sind Eigenheiten der echten
@@ -143,8 +136,8 @@ Der Index kostet zusätzlichen Speicher und Schreibaufwand auf dem Pi.
 `media.skip_reason` (CHECK: `rule_off`, `too_large`, `history`, `queue_full`, `retention`, `failed`, `link_expired`) und `media.loadable`;
 Tabelle `message_versions` (frühere Fassungen, `ON DELETE CASCADE`) und `ingest_commands` (Befehle Web → Ingest, z. B. `load_media`).
 
-Neue Funktionen in `client.ts`: `applyMessageEdit` (legt die alte Fassung ab), `listMessageVersions`, `markMessageDeleted` (setzt `deleted_at`),
-`setMessageProtected`, `countProtected`, `enqueueCommand`/`listCommands`/`deleteCommand`; `setMediaStatus` kennt `skipReason` und `loadable`;
+Neue Funktionen in `client.ts`: `applyMessageEdit` (legt die alte Fassung ab), `markMessageDeleted` (setzt `deleted_at`),
+`setMessageProtected`, `enqueueCommand`/`listCommands`/`deleteCommand`; `setMediaStatus` kennt `skipReason` und `loadable`;
 `insertMessageIfNotExists` nimmt `viewOnce` und das Kurzzitat. **`deleteExpired` lässt geschützte Nachrichten samt Medien stehen**, ausser
 `includeProtected` ist genau `true`. Jeder Dienst migriert beim Start selbst, der Cleanup-Dienst nie (er prüft die Spalten und läuft auf einer
 noch nicht migrierten Datenbank wie bisher).

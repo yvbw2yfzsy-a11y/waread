@@ -2,6 +2,8 @@
 // ArrayBuffer-based browser API. Deliberately does not use PublicKeyCredential.toJSON /
 // parse*OptionsFromJSON, which older Safari versions lack.
 
+import { isObj } from './util';
+
 export type Json = Record<string, unknown>;
 
 export function passkeySupported(): boolean {
@@ -23,7 +25,6 @@ function toB64u(buf: ArrayBuffer): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const asList = (v: unknown): Json[] => (Array.isArray(v) ? v.filter(isObj) : []);
 
 /** navigator.credentials.create() with the server's options; result is the JSON the server expects. */

@@ -32,7 +32,6 @@ export function testConfig(dir: string, patch: (c: IngestConfig) => void = () =>
     db: path.join(dir, 'db', 'waread.db'),
     authDir: path.join(dir, 'auth'),
     mediaDir: path.join(dir, 'media'),
-    tmpDir: path.join(dir, 'tmp'),
     stateDb: path.join(dir, 'db', 'ingest-state.db'),
   }
   fs.mkdirSync(path.join(dir, 'db'), { recursive: true })

@@ -43,8 +43,6 @@ export interface IngestConfig {
     db: string
     authDir: string
     mediaDir: string
-    /** Teil der gemeinsamen Zielstruktur; der Ingest-Dienst nutzt es NICHT (Teildateien entstehen als .part neben dem Ziel). */
-    tmpDir: string
     /** Privater SQLite-Speicher des Ingest-Dienstes (Medien-Deskriptoren, Namenscache). */
     stateDb: string
   }
@@ -106,7 +104,6 @@ export function defaultConfig(): IngestConfig {
       db: '/var/lib/waread/db/waread.db',
       authDir: '/var/lib/waread/auth',
       mediaDir: '/var/lib/waread/media',
-      tmpDir: '/var/lib/waread/tmp',
       stateDb: '/var/lib/waread/db/ingest-state.db',
     },
     retention: { messagesDays: 3, mediaDays: 3 },
@@ -212,7 +209,6 @@ export function loadConfig(opts: LoadConfigOptions = {}): IngestConfig {
   cfg.paths.db = pickStr(paths, 'db', cfg.paths.db)
   cfg.paths.authDir = pickStr(paths, 'auth_dir', cfg.paths.authDir)
   cfg.paths.mediaDir = pickStr(paths, 'media_dir', cfg.paths.mediaDir)
-  cfg.paths.tmpDir = pickStr(paths, 'tmp_dir', cfg.paths.tmpDir)
   cfg.paths.stateDb = path.join(path.dirname(cfg.paths.db), 'ingest-state.db')
 
   const retention = table(root.retention)

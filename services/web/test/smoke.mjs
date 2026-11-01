@@ -573,7 +573,7 @@ client.setMediaStatus(db, 's1', { filePath: 'A/2023-11-14/a3.jpg', thumbnailPath
 pushEvent(db, 'media_ready', { messageId: 's1', filePath: '/var/lib/waread/media/geheim/pfad.jpg' });
 ok('SSE media_ready mit API-Pfaden statt Dateisystempfaden', await waitFor(() => /event: media_ready\ndata: \{[^\n]*"filePath":"api\/media\/s1"/.test(s1.data) && /"thumbnailPath":"api\/media\/s1\?thumb=1"/.test(s1.data)), s1.data);
 ok('SSE leakt keinen Dateisystempfad', !s1.data.includes('/var/lib/waread') && !s1.data.includes(mediaDir));
-pushEvent(db, 'qr', { qr: 'GEHEIMER-QR' }); // alte Konvention, wird nie weitergereicht
+pushEvent(db, 'qr', { qr: 'GEHEIMER-QR' }); // fruehere Konvention: unbekannter Typ, wird verworfen und nie weitergereicht
 pushEvent(db, 'message_updated', { messageId: 's1' });
 pushEvent(db, 'unbekannter_typ', { x: 1 });
 pushEvent(db, 'cleanup_done', { deletedMessages: 2, deletedMedia: 1, extra: 'x' });

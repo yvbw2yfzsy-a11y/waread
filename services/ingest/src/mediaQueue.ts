@@ -25,7 +25,6 @@ import { Transform, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { IngestConfig, MediaKind } from './config.js'
 import {
-  ensureMediaRow,
   isMessageProtected,
   listLoadableMediaIds,
   listMediaIdsByStatus,
@@ -534,10 +533,9 @@ export class MediaQueue {
     }
   }
 
-  /** setMediaStatus mit Schutz gegen zwischenzeitlich geloeschte Nachrichten (Fremdschluessel). */
+  /** setMediaStatus (legt die media-Zeile bei Bedarf an) mit Schutz gegen zwischenzeitlich geloeschte Nachrichten. */
   private safeStatus(messageId: string, patch: Parameters<typeof setMediaStatus>[2]): boolean {
     try {
-      ensureMediaRow(this.db, messageId)
       setMediaStatus(this.db, messageId, patch)
       return true
     } catch (err) {

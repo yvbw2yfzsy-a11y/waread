@@ -61,6 +61,9 @@ export function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
 }
 
+/** Ein JSON-Objekt (kein Array, kein null). */
+export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 export function statusLabel(s: ConnState): string {
   switch (s) {
     case 'connected': return 'Verbunden';

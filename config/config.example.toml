@@ -17,7 +17,6 @@
 db = "/var/lib/waread/db/waread.db"        # SQLite-Datei (Ingest, Web)
 auth_dir = "/var/lib/waread/auth"          # WhatsApp-Sitzung des Ingest-Dienstes (Rechte 0700, Dateien 0600)
 media_dir = "/var/lib/waread/media"        # Wurzel der Mediendateien (Ingest schreibt, Web liefert, Cleanup löscht)
-tmp_dir = "/var/lib/waread/tmp"            # von der Zielstruktur vorgesehen; der Ingest nutzt es nicht (Teildateien liegen neben dem Ziel)
 # db_module = "/opt/waread/current/db/dist/client.js"   # nur Web: Standardsuche findet db/dist/client.js im Release
 
 # ------------------------------------------------------------------------------------------------

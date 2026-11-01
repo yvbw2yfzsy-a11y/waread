@@ -8,16 +8,13 @@
 
 import { apiUrl, normMediaStatus, normMessage, normStatus } from './api';
 import type { SseHandlers } from './types';
+import { isObj } from './util';
 
-const EVENTS = ['new_message', 'message_updated', 'media_ready', 'connection_status', 'cleanup_done', 'history_synced'] as const;
 const MIN_BACKOFF = 1000;
 const MAX_BACKOFF = 30_000;
 const STALE_AFTER_HIDDEN_MS = 20_000;
 
-type Raw = Record<string, unknown>;
-const isObj = (v: unknown): v is Raw => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-function parse(ev: Event): Raw | null {
+function parse(ev: Event): Record<string, unknown> | null {
   try {
     const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
     return isObj(data) ? data : null;
@@ -142,6 +139,3 @@ export function startEvents(h: SseHandlers): () => void {
     window.removeEventListener('online', onVisibility);
   };
 }
-
-// Reference so the list of contract events stays next to the listeners.
-export const SSE_EVENT_NAMES = EVENTS;
