@@ -16,6 +16,37 @@ Alle Befehle laufen als normaler Benutzer mit `sudo` auf dem Pi.
 
 ---
 
+## Abkürzung: Komplettinstallation mit `install.sh`
+
+Das Skript `install.sh` im **Wurzelordner** des Projekts (nicht `deploy/install.sh`) holt waread von GitHub und erledigt in einem Durchlauf die Abschnitte 3 (Pakete, Node.js), 5 (Bauen), 6 (Installieren), den Passwortteil von 7 und 9 (Starten, `/healthz`). Es läuft als root, lies es vorher:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/yvbw2yfzsy-a11y/waread/main/install.sh
+less install.sh
+sudo bash install.sh
+```
+
+Es tut, in dieser Reihenfolge:
+
+1. **Voraussetzungen prüfen.** Abbruch bei: kein root, kein systemd, Architektur nicht `aarch64` (oder `x86_64`), kein `nginx`, Port 8780 von einem fremden Programm belegt, weniger als 1000 MB frei auf `/var/tmp` oder 500 MB auf `/opt`. Nur Warnung bei: Uhr nicht synchronisiert, weniger als 1,8 GB Arbeitsspeicher.
+2. **Pakete installieren.** Nur die fehlenden aus `ca-certificates curl git openssl ffmpeg build-essential python3 sqlite3`, mit `--no-install-recommends`, ohne `apt upgrade`. Vorher läuft `apt-get -s`: Würde apt etwas entfernen oder `nginx` ändern, bricht das Skript ab, bevor etwas installiert wird. Danach der ffmpeg-Test aus Abschnitt 3.4.
+3. **Node.js ab 22.12.** Ein vorhandenes `node` in `/usr/local/bin` oder `/usr/bin` genügt, wenn es neu genug ist. Sonst lädt das Skript das offizielle Archiv von `nodejs.org` nach `/opt/waread/node-22` (SHA-256 gegen die `SHASUMS256.txt` derselben Seite geprüft) und lässt das vorhandene Node unangetastet (Variante C aus 3.3). Die vier Dienste bekommen dann ein Drop-in `/etc/systemd/system/waread-<name>.service.d/waread-node.conf`.
+4. **Quelltext holen.** `git fetch --depth 1` von GitHub in ein privates Bauverzeichnis `/var/tmp/waread-build.*`, als Benutzer `nobody`. Es liest die Version aus der Datei `VERSION`.
+5. **Bauen und prüfen**, alles als `nobody`, nie als root: Abhängigkeits-Tor (kein `lotusbail` in `package-lock.json`, `baileys` auf eine exakte Version festgelegt), `npm ci`, `npm run build` (mit Sende-Wächter), `npm test` (nicht bei `--skip-tests`), `npm run prune:prod`. Danach gehört der Baum root.
+6. **Installieren** mit `deploy/install.sh --no-start` (Abschnitt 6: Benutzer `waread`, Verzeichnisse, Release, Units, Nginx-Ausschnitt), bei eigenem Node mit `--node`.
+7. **Passwort.** Abfrage am Terminal, ohne Echo, zweimal, mindestens 10 Zeichen. Der Hash entsteht mit `hash-password.js` als Benutzer `waread` (das Passwort geht nur über stdin, nie als Argument) und ersetzt die Platzhalterzeile in `/etc/waread/config.toml`. Eine schon gesetzte Konfiguration bleibt unberührt.
+8. **Starten.** Neustart von `waread-ingest` und `waread-web`, Start der beiden Aufräum-Timer, Warten auf `GET /healthz`. Am Ende steht, was noch von Hand zu tun ist.
+
+**Bleibt deine Aufgabe:** Craft-Ausgangszustand sichern **vor** dem Skript (Abschnitt 2) und danach vergleichen (13), die `include`-Zeile in Nginx (Abschnitt 8; das Skript baut Nginx nicht um), die Kopplung mit der Testnummer (10) und die Prüfungen 11, 12 und 14. Das Skript koppelt nicht, schaltet den Update-Timer nicht ein und ändert nichts am Craft-System.
+
+Optionen (`sudo bash install.sh --help`): `--ref REF` (Branch, Tag oder Commit; Standard `main`), `--repo URL`, `--skip-tests`, `--skip-password` (Platzhalter bleibt, Dienste starten nicht), `--no-start`, `--upgrade`, `--keep-build`.
+
+**Wiederholung und Update.** Das Skript ist wiederholbar. Ist die Version aus dem Repository schon aktiv, entfällt Bauen und Installieren, und es prüft nur noch Units, Nginx-Ausschnitt und startet die Dienste neu. Ist eine **andere** Version aktiv, bricht es ab, solange `--upgrade` fehlt: Ein Update startet die Dienste neu und kann die Datenbank ändern, und für die Datenbank gibt es keinen Rückweg (`docs/MAINTENANCE.md`). Erst sichern, dann mit `--upgrade`. Bei einem Fehler bleibt das Bauverzeichnis zum Nachsehen liegen; es steht in der letzten Zeile.
+
+**Was geprüft ist und was nicht.** Geprüft in einer x86-64-Sandbox mit echtem GitHub, echtem npm, echtem nginx 1.24 und echtem Node 22: der ganze Ablauf auf frischem System (Passwort über ein Pseudo-Terminal), die Wiederholung, das Update (inklusive der Tests), Abbruch bei fehlendem `--upgrade`, belegtem Port, nginx-Änderung durch apt, unbekannter Option, nicht vorhandenem `--ref`, fehlendem Terminal, `--skip-password` und `--no-start`; danach Anmeldung (falsches Passwort 401, richtiges 200, Cookie `Path=/waread/`) über nginx. **Nicht geprüft:** ein Lauf auf einem Pi (arm64, echte Download-Zeiten, ob die vorgebauten Programmteile von `better-sqlite3` und `sharp` für arm64 geladen werden oder kompiliert werden müssen), das Verhalten der Units unter echtem systemd (in der Sandbox ersetzte eine Attrappe `systemctl` und startete die Dienste direkt) und `cron`/`needrestart` auf dem Pi.
+
+---
+
 ## 1. Vorab-Prüfung
 
 ```bash
