@@ -127,6 +127,9 @@ await running.listen();
 
 // ---------- HTTP-Helfer ----------
 function call(method, p, o = {}, port = PORT) {
+  // Wie die Oberflaeche (api.ts): Schreibende Anfragen tragen immer application/json, auch ohne Daten ("{}"). `raw: true`
+  // schickt sie ohne Content-Type, um die Sperre selbst zu pruefen.
+  if (o.body === undefined && (method === 'POST' || method === 'PUT') && !o.raw) o = { ...o, body: {} };
   return new Promise((resolve, reject) => {
     const headers = { ...(o.headers ?? {}) };
     let payload;
@@ -423,6 +426,41 @@ r = await call('POST', `/api/chats/${encodeURIComponent(A)}/seen`, { cookie, bod
 ok('seen all kein bool -> 400', r.status === 400);
 r = await call('POST', `/api/chats/${encodeURIComponent(A)}/seen`, { cookie, body: 'x=1', headers: { 'content-type': 'text/plain' } });
 ok('seen mit text/plain -> 415 (CSRF-Haertung)', r.status === 415);
+
+// Zweite Sperre gegen Anfragen fremder Seiten: JEDE schreibende Anfrage verlangt application/json, auch ohne Body. Eine
+// "einfache" Anfrage (kein Content-Type, kein Preflight) kam frueher bei connect, avatar/refresh, played und load durch.
+{
+  const bodyless = [
+    ['POST', '/api/connect'],
+    ['POST', `/api/chats/${encodeURIComponent(A)}/avatar/refresh`],
+    ['POST', '/api/messages/a4/played'],
+    ['POST', '/api/media/a9/load'],
+    ['POST', `/api/chats/${encodeURIComponent(A)}/seen`],
+    ['POST', '/api/storage/clear'],
+    ['PUT', '/api/settings'],
+    ['PUT', `/api/chats/${encodeURIComponent(A)}/mute`],
+  ];
+  for (const [m, path] of bodyless) {
+    const bare = await call(m, path, { cookie, raw: true });
+    ok(`${m} ${path.replace(/%40/g, '@').slice(0, 40)} ohne Content-Type -> 415`, bare.status === 415 && bare.json?.error === 'unsupported_media_type', bare.status);
+    const form = await call(m, path, { cookie, raw: true, headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'a=1' });
+    ok(`${m} ${path.replace(/%40/g, '@').slice(0, 40)} als Formular -> 415`, form.status === 415, form.status);
+  }
+  const noSession = await call('POST', '/api/connect', { raw: true });
+  ok('ohne Sitzung gilt weiter zuerst 401 (nicht 415)', noSession.status === 401, noSession.status);
+  const logoutBare = await call('POST', '/api/logout', { raw: true });
+  ok('logout ohne Content-Type -> 415 (auch oeffentliche schreibende Routen)', logoutBare.status === 415, logoutBare.status);
+  const loginBare = await call('POST', '/api/login', { raw: true, headers: { 'x-forwarded-for': '10.9.9.9' } });
+  ok('login ohne Content-Type -> 415', loginBare.status === 415, loginBare.status);
+  const unknown = await call('POST', '/api/gibt-es-nicht', { cookie, raw: true });
+  ok('unbekannte Route bleibt 404 (nicht 415)', unknown.status === 404, unknown.status);
+  const wrongMethod = await call('DELETE', '/api/connect', { cookie, raw: true });
+  ok('falsche Methode bleibt 405', wrongMethod.status === 405, wrongMethod.status);
+  const okJson = await call('POST', '/api/connect', { cookie });
+  ok('mit application/json (auch ohne Daten) geht es durch: 202', okJson.status === 202, okJson.status);
+  const charset = await call('POST', '/api/connect', { cookie, body: {}, headers: { 'content-type': 'Application/JSON; charset=UTF-8' } });
+  ok('Content-Type mit Gross-/Kleinschreibung und charset wird erkannt', charset.status === 202, charset.status);
+}
 r = await call('POST', `/api/chats/nope/seen`, { cookie, body: { all: true } });
 ok('seen unbekannter Chat -> 404', r.status === 404);
 r = await call('POST', `/api/chats/${encodeURIComponent(A)}/seen`, { cookie, body: { upTo: 'a3' } });
