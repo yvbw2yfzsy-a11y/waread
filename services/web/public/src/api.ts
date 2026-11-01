@@ -10,6 +10,7 @@ import type {
   Chat, ChatPreview, ClearResult, ClearScope, DownloadKind, DownloadMaxMb, DownloadRules, MediaInfo, Message,
   MessageType, MessageVersions, QuotedRef, SearchFilters, SearchHit, Settings, StatusInfo, StorageUsage, ConnState,
 } from './types';
+import { chatName } from './chatLabel';
 import { noteTimestampUnit, toApiTs } from './util';
 
 /**
@@ -46,9 +47,11 @@ async function request(method: string, path: string, body?: unknown): Promise<Re
       cache: 'no-store',
       signal: ctrl.signal,
     };
-    if (body !== undefined) {
+    // Schreibende Anfragen tragen immer application/json (auch ohne Daten, dann "{}"): Der Server lehnt sonst ab. Das ist
+    // zugleich die Sperre gegen Anfragen fremder Seiten, die diesen Header ohne Vorabanfrage nicht setzen koennen.
+    if (method !== 'GET' && method !== 'HEAD') {
       init.headers = { 'Content-Type': 'application/json' };
-      init.body = JSON.stringify(body);
+      init.body = JSON.stringify(body === undefined ? {} : body);
     }
     const res = await fetch(apiUrl(path), init);
     // A wrong password / passkey on the login screen is not an expired session.
@@ -225,16 +228,6 @@ function normPreview(r: Raw): ChatPreview {
   return p;
 }
 
-/** The API falls back to the id's local part when a chat has no name; show something readable instead. */
-function chatName(id: string, name: string | undefined, isGroup: boolean): string {
-  const idName = id.split('@')[0] ?? id;
-  if (name === undefined || name === '' || name === idName) {
-    if (isGroup) return 'Unbenannte Gruppe';
-    return /^\d{6,}$/.test(idName) ? `+${idName}` : idName || id;
-  }
-  return name;
-}
-
 export function normChat(v: unknown): Chat {
   const r: Raw = isObj(v) ? v : {};
   const id = str(r.id) ?? '';
@@ -296,8 +289,9 @@ export function normStatus(v: unknown): StatusInfo {
   return s;
 }
 
+// Stabil nach Zeit sortieren: Nachrichten derselben Sekunde behalten die Reihenfolge des Servers (siehe messageOrder.ts).
 function sortAsc(list: Message[]): Message[] {
-  return list.sort((a, b) => a.waTimestamp - b.waTimestamp || a.id.localeCompare(b.id));
+  return list.sort((a, b) => a.waTimestamp - b.waTimestamp);
 }
 
 function listFrom(v: unknown, keys: string[]): unknown[] {

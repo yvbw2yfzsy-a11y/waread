@@ -250,16 +250,43 @@ describe('JobStore', () => {
     assert.equal(store.pnForLid('2@lid'), undefined)
   })
 
-  it('F14: clearIdentityData leert Namen und LID-Zuordnung, nicht die Medienaufgaben, und meldet die Anzahl', () => {
+  it('F14: clearIdentityData leert Namen, LID-Zuordnung und Nachrichten-Geheimnisse, nicht die Medienaufgaben, und meldet die Anzahl', () => {
     store.upsertJob(job('a'), 1)
     store.upsertName('j1', 'Anna', NAME_RANK.chat)
     store.upsertName('j2', 'Bert', NAME_RANK.push)
     store.setLidMapping('1@lid', 'a@s.whatsapp.net')
-    assert.deepEqual(store.clearIdentityData(), { names: 2, lidMappings: 1 })
+    store.putMsgSecret('m1', ['1@lid'], Buffer.alloc(32, 7), 100, 1)
+    assert.deepEqual(store.clearIdentityData(), { names: 2, lidMappings: 1, msgSecrets: 1 })
     assert.equal(store.getName('j1'), undefined)
     assert.equal(store.pnForLid('1@lid'), undefined)
+    assert.equal(store.getMsgSecret('m1'), undefined)
     assert.equal(store.countJobs(), 1)
-    assert.deepEqual(store.clearIdentityData(), { names: 0, lidMappings: 0 })
+    assert.deepEqual(store.clearIdentityData(), { names: 0, lidMappings: 0, msgSecrets: 0 })
+  })
+
+  it('Nachrichten-Geheimnisse: speichern, lesen, erste Fassung gilt, Aufraeumen nach Alter', () => {
+    const s1 = Buffer.alloc(32, 1)
+    const s2 = Buffer.alloc(32, 2)
+    store.putMsgSecret('m1', ['1@lid', 'a@s.whatsapp.net', '1@lid'], s1, 100, 1)
+    const got = store.getMsgSecret('m1')
+    assert.deepEqual(got?.senders, ['1@lid', 'a@s.whatsapp.net'], 'Doppelte entfallen')
+    assert.ok(got?.secret.equals(s1))
+    assert.equal(got?.waTimestamp, 100)
+    store.putMsgSecret('m1', ['x'], s2, 999, 2)
+    assert.ok(store.getMsgSecret('m1')?.secret.equals(s1), 'ein vorhandenes Geheimnis wird nicht ueberschrieben')
+    store.putMsgSecret('m2', [], s2, 500, 3)
+    assert.equal(store.countMsgSecrets(), 2)
+    assert.equal(store.pruneMsgSecrets(200), 1, 'nur das Aeltere (Zeitstempel 100) faellt weg')
+    assert.equal(store.getMsgSecret('m1'), undefined)
+    assert.deepEqual(store.getMsgSecret('m2')?.senders, [])
+    assert.equal(store.getMsgSecret('gibt-es-nicht'), undefined)
+  })
+
+  it('Nachrichten-Geheimnisse ueberleben das Wiederoeffnen', () => {
+    store.putMsgSecret('m1', ['1@lid'], Buffer.alloc(32, 5), 100, 1)
+    store.close()
+    store = JobStore.open(path.join(tmp.dir, 'state.db'))
+    assert.ok(store.getMsgSecret('m1')?.secret.equals(Buffer.alloc(32, 5)))
   })
 
   it('Zustand ueberlebt Wiederoeffnen', () => {

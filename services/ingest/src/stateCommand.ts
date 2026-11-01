@@ -57,7 +57,7 @@ export class StateCommands {
     if (cmd === 'clear_identity') {
       try {
         const n = this.d.jobs.clearIdentityData()
-        this.d.log.info('state_identity_cleared', { names: n.names, lid_mappings: n.lidMappings })
+        this.d.log.info('state_identity_cleared', { names: n.names, lid_mappings: n.lidMappings, msg_secrets: n.msgSecrets })
       } catch (err) {
         this.d.log.error('state_identity_clear_failed', errorFields(err))
         return

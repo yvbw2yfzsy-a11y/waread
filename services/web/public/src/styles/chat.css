@@ -223,14 +223,11 @@
   border-radius: var(--r-pill); background: rgba(255, 255, 255, 0.3);
 }
 .wave i.on { background: var(--text); }
-/* Thumb: before the first unplayed bar, at the start before playing, at the end when all bars are played. */
-.wave i.on + i:not(.on)::before, .wave i:first-child:not(.on)::before, .wave i.on:last-child::after {
-  content: ""; position: absolute; z-index: 1; top: 50%; width: 13px; height: 13px; margin-top: -6.5px;
+/* Thumb: a separate element that glides with the playback position (left is set per frame). */
+.wave-thumb {
+  position: absolute; z-index: 1; top: 50%; left: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px;
   border-radius: 50%; background: var(--thumb, var(--link)); pointer-events: none;
 }
-.wave i.on + i:not(.on)::before { left: -7.5px; }
-.wave i:first-child:not(.on)::before { left: -6.5px; }
-.wave i.on:last-child::after { right: -6.5px; }
 /* Not yet listened to (incoming): yellow thumb, matching the yellow dot at the microphone. */
 .voice:has(.voice-dot:not([hidden])) { --thumb: var(--yellow); }
 .voice-foot { display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; font-size: var(--fs-subhead); line-height: 1.2; color: var(--meta-on-bubble); font-variant-numeric: tabular-nums; }

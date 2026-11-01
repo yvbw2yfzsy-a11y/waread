@@ -5,12 +5,14 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import sharp from 'sharp'
+import { proto } from 'baileys'
 import { openAuthStore, type AuthStore } from '../src/authStore.js'
 import { enqueueCommand } from '@waread/db'
 import { getSetting, setSetting } from '../src/dbClient.js'
 import { createService, type Service } from '../src/service.js'
 import type { DownloadTarget } from '../src/waLib.js'
 import { all, boom, FakeLib, fakeAuthLib, makeEnv, one, type TestEnv } from './support/helpers.js'
+import { encryptEdit } from './support/secretEditSupport.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, ms = 4000): Promise<void> {
@@ -26,7 +28,7 @@ const PN = '491701234567@s.whatsapp.net'
 /** Gesamtweg mit gefaelschter Bibliothek: Ereignis -> Normalisierung -> Datenbank -> Download -> Vorschau -> fertig. */
 describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => {
   let env: TestEnv
-  let lib: FakeLib & { downloadMedia: (t: DownloadTarget) => Promise<Readable> }
+  let lib: FakeLib & { downloadMedia: (t: DownloadTarget) => Promise<Readable>; decodeMessage: (b: Uint8Array) => unknown }
   let auth: AuthStore
   let service: Service
   let payloads: Map<string, Buffer>
@@ -39,6 +41,7 @@ describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => 
     payloads = new Map()
     const base = new FakeLib()
     lib = Object.assign(base, {
+      decodeMessage: (b: Uint8Array) => proto.Message.decode(b),
       downloadMedia: async (t: DownloadTarget) => {
         const body = payloads.get(Buffer.from(t.mediaKey).toString())
         if (!body) throw boom(404)
@@ -133,6 +136,65 @@ describe('Gesamtweg (ohne WhatsApp-Netz, echte Datenbank/Dateien/sharp)', () => 
     assert.equal(one(env.db, 'SELECT text FROM message_versions WHERE message_id = ?', 'U1').text, 'vorher')
     const updated = all(env.db, "SELECT 1 FROM events_outbox WHERE type = 'message_updated'")
     assert.equal(updated.length, 2)
+  })
+
+  it('verschluesselte Bearbeitung (neues WhatsApp-Format): Gesamtweg bis zur neuen Fassung, ohne dass etwas ausgesendet wird', async () => {
+    service.start()
+    const sock = lib.last
+    sock.emit('connection.update', { connection: 'open' })
+    const secret = Buffer.alloc(32, 77)
+    sock.emit('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'S1', remoteJid: PN },
+          messageTimestamp: now(),
+          pushName: 'Anna',
+          message: { conversation: 'Test', messageContextInfo: { messageSecret: secret } },
+        },
+      ],
+    })
+    assert.equal(env.jobs.countMsgSecrets(), 1)
+    const inner = proto.Message.encode(
+      proto.Message.fromObject({
+        protocolMessage: { type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT, key: { id: 'S1' }, editedMessage: { conversation: 'Test (korrigiert)' }, timestampMs: Date.now() },
+      }),
+    ).finish()
+    const enc = encryptEdit(secret, 'S1', PN, PN, inner)
+    sock.emit('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'S2', remoteJid: PN },
+          messageTimestamp: now(),
+          pushName: 'Anna',
+          message: { secretEncryptedMessage: { targetMessageKey: { id: 'S1', remoteJid: PN, fromMe: true }, encPayload: enc.payload, encIv: enc.iv, secretEncType: 2 } },
+        },
+      ],
+    })
+    assert.deepEqual(one(env.db, 'SELECT text, edited FROM messages WHERE id = ?', 'S1'), { text: 'Test (korrigiert)', edited: 1 })
+    assert.equal(one(env.db, 'SELECT text FROM message_versions WHERE message_id = ?', 'S1').text, 'Test')
+    assert.equal(one(env.db, 'SELECT COUNT(*) AS n FROM messages').n, 1, 'keine zusaetzliche Zeile fuer die Bearbeitung')
+    assert.equal(all(env.db, "SELECT 1 FROM events_outbox WHERE type = 'message_updated'").length, 1)
+    assert.deepEqual(lib.unexpectedCalls, [])
+  })
+
+  it('Einmal-Foto, das live nur als <unavailable type="view_once"/> eintrifft: Hinweis in der Liste, nichts wird gespeichert', async () => {
+    service.start()
+    const sock = lib.last
+    sock.emit('connection.update', { connection: 'open' })
+    sock.emit('messages.upsert', {
+      type: 'notify',
+      messages: [{ key: { id: 'VO1', remoteJid: PN, fromMe: false, isViewOnce: true }, messageTimestamp: now(), pushName: 'Anna' }],
+    })
+    assert.deepEqual(one(env.db, 'SELECT type, text, view_once FROM messages WHERE id = ?', 'VO1'), {
+      type: 'system',
+      text: 'Einmal-Ansehen-Medium (nicht gespeichert)',
+      view_once: 1,
+    })
+    assert.equal(one(env.db, 'SELECT COUNT(*) AS n FROM media').n, 0)
+    assert.equal(all(env.db, "SELECT 1 FROM events_outbox WHERE type = 'new_message'").length, 1)
+    assert.deepEqual(lib.unexpectedCalls, [])
   })
 
   it('"Medium jetzt laden": Video ohne Auto-Download wird nur zurueckgestellt, auf Befehl des Web geladen und ist dann fertig', async () => {

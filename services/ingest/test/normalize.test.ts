@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   isIgnoredChat,
+  kindsOf,
   normalizeJid,
   normalizeMessage,
   PLACEHOLDER,
@@ -192,6 +193,14 @@ describe('normalizeMessage: ignorierte Nachrichten', () => {
     ['Reaktion', raw({ reactionMessage: { text: '👍' } }), 'non_message'],
     ['Umfrage-Stimme', raw({ pollUpdateMessage: {} }), 'non_message'],
     ['verpackte Bearbeitung', raw({ ephemeralMessage: { message: { protocolMessage: { type: 14 } } } }), 'non_message'],
+    ['verschluesselte Bearbeitung', raw({ secretEncryptedMessage: { secretEncType: 2 } }), 'non_message'],
+    ['verschluesselte Termin-Bearbeitung', raw({ secretEncryptedMessage: { secretEncType: 1 } }), 'non_message'],
+    ['Nachricht anheften', raw({ pinInChatMessage: { type: 1 } }), 'non_message'],
+    ['Album-Kopfzeile', raw({ albumMessage: { expectedImageCount: 3 } }), 'non_message'],
+    ['nur Gruppenschluessel', raw({ senderKeyDistributionMessage: { groupId: 'x' } }), 'no_content'],
+    ['nur Zusatzdaten', raw({ messageContextInfo: { deviceListMetadata: {} } }), 'no_content'],
+    ['Gruppenschluessel mit Zusatzdaten', raw({ senderKeyDistributionMessage: {}, messageContextInfo: {} }), 'no_content'],
+    ['ohne Inhalt, Einmal-Markierung fehlt (false)', raw(undefined, { key: { id: 'a', remoteJid: PN, isViewOnce: false } }), 'no_content'],
   ]
   for (const [name, r, reason] of cases) {
     it(name, () => {
@@ -257,5 +266,131 @@ describe('normalizeMessage: Absender, Chats, LID', () => {
       { key: { id: 'g1', remoteJid: GROUP, participant: '77@lid', participantAlt: PN } },
     )
     assert.equal(msgOf(r).senderJid, PN)
+  })
+})
+
+describe('normalizeMessage: Einmal-Medien, die live ohne Inhalt eintreffen', () => {
+  const live = (over: Partial<RawMessage['key'] & object> = {}): RawMessage => ({
+    key: { id: 'V1', remoteJid: PN, fromMe: false, isViewOnce: true, ...over },
+    messageTimestamp: TS,
+    pushName: 'Anna',
+  })
+
+  it('WhatsApp stellt Einmal-Medien einem verknuepften Geraet nur als <unavailable type="view_once"/> zu: Hinweis statt Verschweigen', () => {
+    const m = msgOf(live())
+    assert.equal(m.type, 'system')
+    assert.equal(m.text, PLACEHOLDER.viewOnce)
+    assert.equal(m.viewOnce, true)
+    assert.equal(m.media, undefined)
+    assert.equal(m.viewOnceProbe, undefined)
+    assert.equal(m.msgSecret, undefined)
+    assert.equal(m.id, 'V1')
+    assert.equal(m.chatId, PN)
+    assert.equal(m.direction, 'in')
+    assert.equal(m.sender, 'Anna')
+    assert.equal(m.waTimestamp, TS)
+  })
+
+  it('auch in einer Gruppe, mit Absender', () => {
+    const m = msgOf(live({ remoteJid: GROUP, participant: '491709999999:7@s.whatsapp.net' }))
+    assert.equal(m.isGroup, true)
+    assert.equal(m.senderJid, '491709999999@s.whatsapp.net')
+    assert.equal(m.text, PLACEHOLDER.viewOnce)
+  })
+
+  it('auch mit store_view_once bleibt es beim Hinweis (es gibt nichts zu speichern)', () => {
+    const m = msgOf(live(), { ...noEnv, storeViewOnce: true })
+    assert.equal(m.text, PLACEHOLDER.viewOnce)
+    assert.equal(m.media, undefined)
+  })
+
+  it('ohne Markierung und ohne Inhalt bleibt es bei "ignoriert"', () => {
+    assert.deepEqual(normalizeMessage({ key: { id: 'V2', remoteJid: PN }, messageTimestamp: TS }, noEnv), { kind: 'ignored', reason: 'no_content' })
+  })
+
+  it('Einmal-Medien aus dem Verlauf (mit Inhalt) verhalten sich unveraendert', () => {
+    const m = msgOf(raw({ viewOnceMessageV2: { message: { imageMessage: { mediaKey: Buffer.from('k') } } } }))
+    assert.equal(m.text, PLACEHOLDER.viewOnceKind.image)
+    assert.ok(m.viewOnceProbe)
+  })
+
+  it('Markierung UND Inhalt: der Inhalt gilt (kein zweiter, allgemeiner Hinweis)', () => {
+    const m = msgOf(raw({ conversation: 'normal' }, { key: { id: 'V3', remoteJid: PN, isViewOnce: true } }))
+    assert.equal(m.text, 'normal')
+  })
+})
+
+describe('normalizeMessage: Umfragen neuerer Versionen und leere Huellen', () => {
+  const poll = { name: 'Pizza?', options: [{ optionName: 'Ja' }, { optionName: 'Nein' }] }
+  for (const v of ['V4', 'V5']) {
+    it(`pollCreationMessage${v} wird wie eine Umfrage angezeigt`, () => {
+      const m = msgOf(raw({ [`pollCreationMessage${v}`]: poll }))
+      assert.equal(m.type, 'text')
+      assert.match(m.text!, /Umfrage: Pizza\?\n• Ja\n• Nein/)
+    })
+  }
+  it('leere Nachricht {} bleibt wie bisher ein "nicht unterstuetzter" Platzhalter (kein Informationsverlust)', () => {
+    assert.equal(msgOf(raw({})).text, PLACEHOLDER.unsupported)
+  })
+  it('unbekannter Typ zusammen mit Zusatzdaten bleibt sichtbar (nur reine Zusatzdaten werden ignoriert)', () => {
+    assert.equal(msgOf(raw({ somethingNew: {}, messageContextInfo: {} })).text, PLACEHOLDER.unsupported)
+  })
+})
+
+describe('normalizeMessage: Geheimnis der Nachricht (fuer verschluesselte Bearbeitungen)', () => {
+  const secret = Buffer.alloc(32, 9)
+  const LID = '55@lid'
+
+  it('eingehend im Einzelchat: beide Schreibweisen des Absenders, ohne Geraetesuffix', () => {
+    const r = raw(
+      { conversation: 'x', messageContextInfo: { messageSecret: secret } },
+      { key: { id: 'a', remoteJid: `${LID}`, remoteJidAlt: '491701234567:3@s.whatsapp.net' } },
+    )
+    const m = msgOf(r)
+    assert.ok(Buffer.from(m.msgSecret!.secret).equals(secret))
+    assert.deepEqual(m.msgSecret!.senders, [LID, PN])
+  })
+
+  it('Gruppe: der Teilnehmer, nicht die Gruppe', () => {
+    const r = raw(
+      { extendedTextMessage: { text: 'x' }, messageContextInfo: { messageSecret: secret } },
+      { key: { id: 'g1', remoteJid: GROUP, participant: '77:2@lid', participantAlt: PN } },
+    )
+    assert.deepEqual(msgOf(r).msgSecret!.senders, ['77@lid', PN])
+  })
+
+  it('eigene Nachricht: die eigenen Kennungen aus der Umgebung', () => {
+    const env: NormEnv = { ...noEnv, selfJids: () => ['491700000000@s.whatsapp.net', '9@lid'] }
+    const r = raw({ conversation: 'x', messageContextInfo: { messageSecret: secret } }, { key: { id: 'o1', remoteJid: PN, fromMe: true } })
+    assert.deepEqual(msgOf(r, env).msgSecret!.senders, ['491700000000@s.whatsapp.net', '9@lid'])
+    assert.deepEqual(msgOf(r).msgSecret!.senders, [], 'ohne bekannte Kennungen: leer, die Bearbeitung nutzt dann die des Zielschluessels')
+  })
+
+  it('das Geheimnis darf auch in einer Huelle (fluechtige Nachricht) stehen', () => {
+    const m = msgOf(raw({ ephemeralMessage: { message: { conversation: 'x', messageContextInfo: { messageSecret: secret } } } }))
+    assert.ok(m.msgSecret)
+  })
+
+  it('kein Geheimnis, wenn es fehlt, falsch lang oder kein Byte-Feld ist', () => {
+    assert.equal(msgOf(raw({ conversation: 'x' })).msgSecret, undefined)
+    assert.equal(msgOf(raw({ conversation: 'x', messageContextInfo: {} })).msgSecret, undefined)
+    assert.equal(msgOf(raw({ conversation: 'x', messageContextInfo: { messageSecret: Buffer.alloc(31) } })).msgSecret, undefined)
+    assert.equal(msgOf(raw({ conversation: 'x', messageContextInfo: { messageSecret: 'x'.repeat(32) } })).msgSecret, undefined)
+  })
+})
+
+describe('kindsOf: nur Feldnamen fuer das inhaltsfreie Journal', () => {
+  it('Feldnamen, Huellen mit ">" und Typnummern von Protokollnachrichten', () => {
+    assert.equal(kindsOf({ conversation: 'GEHEIM', messageContextInfo: {} }), 'conversation+messageContextInfo')
+    assert.equal(kindsOf({ protocolMessage: { type: 14, editedMessage: { conversation: 'GEHEIM' } } }), 'protocolMessage:14')
+    assert.equal(kindsOf({ secretEncryptedMessage: { secretEncType: 2 } }), 'secretEncryptedMessage:2')
+    assert.equal(kindsOf({ secretEncryptedMessage: { secretEncType: 'MESSAGE_EDIT' } }), 'secretEncryptedMessage:MESSAGE_EDIT')
+    assert.equal(kindsOf({ editedMessage: { message: { protocolMessage: { type: 14 } } } }), 'editedMessage>protocolMessage:14')
+  })
+  it('keine Inhalte, kein Absturz bei Muell', () => {
+    for (const bad of [undefined, null, 'text', 5, [], {}]) assert.equal(typeof kindsOf(bad), 'string')
+    assert.ok(!kindsOf({ conversation: 'GEHEIM' }).includes('GEHEIM'))
+    assert.equal(kindsOf({ 'a b': 1, 'ok_1': 2 }), 'ok_1', 'nur harmlose Namen')
+    assert.ok(kindsOf(Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`feld${i}`, 1]))).length <= 120)
   })
 })

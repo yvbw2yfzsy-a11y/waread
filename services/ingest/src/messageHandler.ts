@@ -11,7 +11,9 @@ import {
   getSetting,
   insertMessageIfNotExists,
   markMessageDeleted,
+  mergeChats,
   pushEvent,
+  renameChat,
   setMediaStatus,
   upsertChat,
   type Database,
@@ -20,6 +22,7 @@ import {
 } from './dbClient.js'
 import { NAME_RANK, type JobStore, type MediaDescriptor, type NewMediaJob } from './jobStore.js'
 import { errorFields, type Logger } from './log.js'
+import { decryptSecretEdit, MESSAGE_SECRET_LENGTH, SECRET_ENC_TYPE_MESSAGE_EDIT } from './secretEdit.js'
 import { nowSec } from './sqlite.js'
 import { realScheduler, type Scheduler } from './timing.js'
 
@@ -34,6 +37,11 @@ export interface RawKey {
   participant?: string | null
   remoteJidAlt?: string | null
   participantAlt?: string | null
+  /**
+   * Von der Bibliothek gesetzt, wenn WhatsApp die Nachricht nur als `<unavailable type="view_once"/>` ohne Inhalt
+   * zustellt. Genau so kommen Einmal-Medien live auf einem verknuepften Geraet an: Es gibt dann keine `message`.
+   */
+  isViewOnce?: boolean | null
 }
 
 export interface RawMessage {
@@ -114,6 +122,8 @@ export interface NormEnv {
   nameOf(jid: string): string | undefined
   /** Einmal-Ansehen-Medien wie normale Medien speichern (Standard aus, siehe config store_view_once). */
   storeViewOnce?: boolean
+  /** Eigene Kennungen des gekoppelten Kontos (LID und Nummer, ohne Geraetesuffix); fuer eigene Nachrichten und deren Bearbeitung. */
+  selfJids?(): string[]
 }
 
 /**
@@ -158,6 +168,50 @@ export interface NormalizedMessage {
   replyText?: string
   replySender?: string
   replyType?: string
+  /**
+   * messageContextInfo.messageSecret samt den Schreibweisen des Absenders. Wird im privaten Speicher abgelegt, damit eine
+   * spaetere verschluesselte Bearbeitung dieser Nachricht gelesen werden kann (secretEdit.ts). Nie im Journal.
+   */
+  msgSecret?: { secret: Uint8Array; senders: string[] }
+}
+
+/** Gueltige JIDs ohne Geraetesuffix und ohne Doppelte. */
+function jidForms(list: readonly unknown[]): string[] {
+  return [...new Set(list.filter((j): j is string => typeof j === 'string' && j !== '').map(normalizeJid))]
+}
+
+/** Schreibweisen (LID und Nummer, ohne Geraetesuffix), unter denen der Absender einer Nachricht eintraf. */
+function senderForms(key: RawKey, isGroup: boolean): string[] {
+  return jidForms(isGroup ? [key.participant, key.participantAlt] : [key.remoteJid, key.remoteJidAlt])
+}
+
+/** Die secretEncryptedMessage einer Nachricht (auch in einer Huelle), sonst undefined. */
+function secretEncryptedOf(message: any): any {
+  if (!message || typeof message !== 'object') return undefined
+  return message.secretEncryptedMessage ?? unwrap(message).content?.secretEncryptedMessage
+}
+
+/**
+ * Nur die Feldnamen einer Nachricht (nie Inhalte), fuer das Journal: "protocolMessage:14", Huellen mit ">" getrennt.
+ * Zeigt, in welcher Form WhatsApp etwas geschickt hat, das hier keine Zeile ergibt oder nicht verstanden wird.
+ */
+export function kindsOf(message: any): string {
+  const levels: string[] = []
+  let cur = message
+  for (let depth = 0; depth < 4 && cur && typeof cur === 'object'; depth++) {
+    const keys = Object.keys(cur).filter((k) => /^[A-Za-z0-9_]{1,48}$/.test(k))
+    levels.push(
+      keys
+        .map((k) => {
+          const t = k === 'protocolMessage' ? cur[k]?.type : k === 'secretEncryptedMessage' ? cur[k]?.secretEncType : undefined
+          return typeof t === 'number' ? `${k}:${t}` : typeof t === 'string' && /^[A-Z_]{1,32}$/.test(t) ? `${k}:${t}` : k
+        })
+        .join('+'),
+    )
+    const wrapper = keys.find((k) => cur[k] && typeof cur[k] === 'object' && cur[k].message && typeof cur[k].message === 'object')
+    cur = wrapper ? cur[wrapper].message : undefined
+  }
+  return levels.join('>').slice(0, 120)
 }
 
 export type NormalizeResult =
@@ -222,9 +276,16 @@ const CONTENT_TYPES = [
   'pollCreationMessage',
   'pollCreationMessageV2',
   'pollCreationMessageV3',
+  'pollCreationMessageV4',
+  'pollCreationMessageV5',
 ] as const
 
-/** Typen, die nie als Nachricht erscheinen (Steuerung, Reaktionen, Bearbeitungen, Abstimmungen). */
+/**
+ * Typen, die nie als Nachricht erscheinen (Steuerung, Reaktionen, Bearbeitungen, Abstimmungen).
+ * `secretEncryptedMessage`: verschluesselte Bearbeitung (MESSAGE_EDIT wird vorher in tryApplySecretEdit ausgewertet; alle
+ * anderen Arten, z. B. Termin- oder Umfrage-Bearbeitung, haben keine eigene Zeile). `pinInChatMessage`: Anheften einer
+ * Nachricht, `albumMessage`: Kopfzeile eines Albums (die Bilder kommen als eigene Nachrichten).
+ */
 const NON_MESSAGE_KEYS = [
   'protocolMessage',
   'reactionMessage',
@@ -232,7 +293,13 @@ const NON_MESSAGE_KEYS = [
   'pollUpdateMessage',
   'editedMessage',
   'keepInChatMessage',
+  'secretEncryptedMessage',
+  'pinInChatMessage',
+  'albumMessage',
 ] as const
+
+/** Felder, die allein keine Nachricht ergeben (Schluesselverteilung der Gruppe, Zusatzdaten). Nur diese -> nichts zu speichern. */
+const HOUSEKEEPING_KEYS = new Set(['senderKeyDistributionMessage', 'messageContextInfo'])
 
 function resolveJid(jid: string | null | undefined, alt: string | null | undefined, env: NormEnv): string | null {
   if (!jid) return null
@@ -334,9 +401,11 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
   if (isIgnoredChat(chatId)) return { kind: 'ignored', reason: 'chat_type' }
   const waTimestamp = toSeconds(raw.messageTimestamp)
   if (waTimestamp === null) return { kind: 'ignored', reason: 'no_timestamp' }
-  if (!raw.message) return { kind: 'ignored', reason: raw.messageStubType ? 'stub' : 'no_content' }
+  // Einmal-Medien kommen live ohne Inhalt an (`<unavailable type="view_once"/>`): keine `message`, aber isViewOnce.
+  const liveViewOnce = !raw.message && key.isViewOnce === true
+  if (!raw.message && !liveViewOnce) return { kind: 'ignored', reason: raw.messageStubType ? 'stub' : 'no_content' }
 
-  const topLevel = raw.message
+  const topLevel = raw.message ?? {}
   for (const k of NON_MESSAGE_KEYS) {
     if (topLevel[k]) return { kind: 'ignored', reason: 'non_message' }
   }
@@ -346,6 +415,10 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
   }
 
   const contentType = CONTENT_TYPES.find((t) => content?.[t] !== undefined && content?.[t] !== null)
+  if (!contentType && !liveViewOnce) {
+    const keys = Object.keys(content ?? {})
+    if (keys.length > 0 && keys.every((k) => HOUSEKEEPING_KEYS.has(k))) return { kind: 'ignored', reason: 'no_content' }
+  }
   const direction: 'in' | 'out' = key.fromMe ? 'out' : 'in'
   const isGroup = isGroupJid(chatId)
 
@@ -374,6 +447,20 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
     direction,
     pushName,
   }
+
+  if (liveViewOnce) {
+    // Die Art (Foto, Video, Sprachnachricht) nennt WhatsApp hier nicht; gespeichert wird nur der Hinweis.
+    return { kind: 'message', message: { ...base, type: 'system', text: PLACEHOLDER.viewOnce, viewOnce: true } }
+  }
+
+  // Geheimnis der Nachricht fuer eine spaetere verschluesselte Bearbeitung (nur fuer Text und Bildunterschriften sinnvoll).
+  const secretOf = (v: unknown): Uint8Array | undefined =>
+    v instanceof Uint8Array && v.length === MESSAGE_SECRET_LENGTH ? v : undefined
+  const msgSecretBytes = secretOf(topLevel.messageContextInfo?.messageSecret) ?? secretOf(content?.messageContextInfo?.messageSecret)
+  const msgSecret: NormalizedMessage['msgSecret'] =
+    msgSecretBytes === undefined
+      ? undefined
+      : { secret: msgSecretBytes, senders: direction === 'out' ? (env.selfJids?.() ?? []) : senderForms(key, isGroup) }
 
   if (!contentType) {
     return { kind: 'message', message: { ...base, type: 'system', text: PLACEHOLDER.unsupported } }
@@ -434,6 +521,7 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
         ...(media ? { media } : {}),
         ...(isViewOnce ? { viewOnce: true } : {}),
         ...(probe ? { viewOnceProbe: probe } : {}),
+        ...(msgSecret ? { msgSecret } : {}),
       },
     }
   }
@@ -471,7 +559,9 @@ export function normalizeMessage(raw: RawMessage, env: NormEnv): NormalizeResult
       return msg('text', describeContacts(content, 'array'))
     case 'pollCreationMessage':
     case 'pollCreationMessageV2':
-    case 'pollCreationMessageV3': {
+    case 'pollCreationMessageV3':
+    case 'pollCreationMessageV4':
+    case 'pollCreationMessageV5': {
       const options = Array.isArray(body.options)
         ? body.options.map((o: any) => o?.optionName).filter((s: unknown) => typeof s === 'string' && s)
         : []
@@ -528,6 +618,15 @@ export interface HandlerDeps {
   retryDelaysMs?: readonly number[]
   /** Hoechstzahl wartender Nachrichten (Speicherschutz). Standard 500. */
   maxPendingRetries?: number
+  /** Liest die Bytes einer Nachricht (protobuf proto.Message). Ohne sie bleiben verschluesselte Bearbeitungen ungelesen. */
+  decodeMessage?: (bytes: Uint8Array) => unknown
+  /** Eigene Kennungen des gekoppelten Kontos (LID und Nummer, ohne Geraetesuffix). */
+  selfJids?: () => string[]
+  /**
+   * Zusaetzliche Quelle fuer die Nummer zu einer LID: die Zuordnungen, die die Bibliothek selbst im Schluesselspeicher fuehrt.
+   * Nur lesend und lokal. Ohne sie kennt waread nur die Zuordnungen, die WhatsApp ausdruecklich meldet (oft keine).
+   */
+  libPnForLid?: (lid: string) => string | undefined
 }
 
 export interface HandleStats {
@@ -576,6 +675,8 @@ export class MessageHandler {
   private lost = 0
 
   private readonly env: NormEnv
+  private readonly decodeMessage: ((bytes: Uint8Array) => unknown) | undefined
+  private readonly libPnForLid: ((lid: string) => string | undefined) | undefined
 
   constructor(deps: HandlerDeps) {
     this.db = deps.db
@@ -587,20 +688,77 @@ export class MessageHandler {
     this.sched = deps.scheduler ?? realScheduler
     this.retryDelays = deps.retryDelaysMs ?? RETRY_DELAYS_MS
     this.maxPending = deps.maxPendingRetries ?? MAX_PENDING_RETRIES
+    this.decodeMessage = deps.decodeMessage
+    this.libPnForLid = deps.libPnForLid
+    const selfJids = deps.selfJids
     this.env = {
-      pnForLid: (lid) => this.jobs.pnForLid(lid),
+      pnForLid: (lid) => this.pnForLid(lid),
       nameOf: (jid) => this.jobs.getName(jid) ?? this.nameViaMapping(jid),
       storeViewOnce: deps.cfg.media?.storeViewOnce === true,
+      ...(selfJids ? { selfJids } : {}),
     }
+  }
+
+  /** Entfernt Geheimnisse, die fuer keine Bearbeitung mehr gebraucht werden (aelter als die Aufbewahrung plus zwei Tage). */
+  purgeSecrets(): number {
+    return this.jobs.pruneMsgSecrets(this.now() - (this.retention().messagesDays + 2) * 86_400)
   }
 
   /** Schlaegt einen Namen auch ueber die LID<->PN-Zuordnung nach. */
   private nameViaMapping(jid: string): string | undefined {
     if (isLidJid(jid)) {
-      const pn = this.jobs.pnForLid(jid)
+      const pn = this.pnForLid(jid)
       return pn ? this.jobs.getName(pn) : undefined
     }
     return undefined
+  }
+
+  /** Die Nummer zu einer LID: gemeldete Zuordnung zuerst, sonst die der Bibliothek (wird dann dauerhaft uebernommen). */
+  private pnForLid(lid: string): string | undefined {
+    const known = this.jobs.pnForLid(lid)
+    if (known) return known
+    let fromLib: string | undefined
+    try {
+      fromLib = this.libPnForLid?.(lid)
+    } catch {
+      return undefined
+    }
+    if (!fromLib) return undefined
+    try {
+      this.jobs.setLidMapping(lid, fromLib)
+    } catch (err) {
+      this.log.warn('lid_mapping_store_failed', errorFields(err))
+    }
+    return fromLib
+  }
+
+  /**
+   * Fuehrt Chats zusammen, die dieselbe Person unter ihrer LID und unter ihrer Nummer zeigen (zwei Eintraege in der Liste,
+   * weil die Zuordnung erst nach der ersten Nachricht bekannt wurde). Der Verlauf zieht in den Nummern-Chat. Rein lokal.
+   * Gibt die Zahl der zusammengefuehrten Chats zurueck.
+   */
+  reconcileLidChats(): number {
+    let merged = 0
+    const targets: string[] = []
+    try {
+      const lids = this.db.prepare("SELECT id FROM chats WHERE id LIKE '%@lid'").all() as { id: string }[]
+      for (const { id } of lids) {
+        const pn = this.pnForLid(id)
+        if (!pn) continue
+        mergeChats(this.db, id, pn)
+        targets.push(pn)
+        merged++
+      }
+      if (merged > 0) {
+        this.refreshChatNames(targets)
+        pushEvent(this.db, 'history_synced', { stored: 0 })
+        this.log.info('lid_chats_merged', { chats: merged })
+      }
+    } catch (err) {
+      // Etwa eine Schreibsperre: der naechste Aufruf (neue Zuordnung, naechster Start) holt es nach.
+      this.log.warn('lid_merge_failed', errorFields(err))
+    }
+    return merged
   }
 
   // --- Aufbewahrung ---------------------------------------------------------------------------
@@ -700,6 +858,80 @@ export class MessageHandler {
       }
       this.log.error('message_update_failed', { msg_id: id, ...errorFields(err) })
     }
+  }
+
+  // --- Verschluesselte Bearbeitung (secretEncryptedMessage, MESSAGE_EDIT) -----------------------------
+
+  /**
+   * Neuere WhatsApp-Apps schicken Bearbeitungen verschluesselt (siehe secretEdit.ts); die Bibliothek meldet sie nur als
+   * Nachricht. Hier wird der neue Inhalt mit dem gespeicherten Geheimnis der Originalnachricht entschluesselt und wie eine
+   * Klartext-Bearbeitung angewendet (neuer Text, bisherige Fassung als Version). Rein lokal, keine Anfrage an WhatsApp.
+   * Gibt true zurueck, wenn die Nachricht eine solche Bearbeitung war (sie erzeugt dann keine eigene Zeile), auch wenn sie
+   * nicht gelesen werden konnte; der Grund steht dann (ohne Inhalt) im Journal.
+   */
+  private tryApplySecretEdit(raw: RawMessage): boolean {
+    const enc = secretEncryptedOf(raw.message)
+    if (!enc) return false
+    const kind = enc.secretEncType
+    if (kind !== SECRET_ENC_TYPE_MESSAGE_EDIT && kind !== 'MESSAGE_EDIT') return false
+
+    const target = enc.targetMessageKey
+    const targetId: unknown = target?.id
+    const iv: unknown = enc.encIv
+    const payload: unknown = enc.encPayload
+    if (typeof targetId !== 'string' || targetId === '' || !(iv instanceof Uint8Array) || !(payload instanceof Uint8Array)) {
+      this.log.warn('edit_invalid')
+      return true
+    }
+    const stored = this.jobs.getMsgSecret(targetId)
+    if (!stored) {
+      // Die Originalnachricht kam vor dieser Version oder gar nicht hier an: ohne ihr Geheimnis ist nichts zu lesen.
+      this.log.info('edit_secret_missing', { msg_id: targetId })
+      return true
+    }
+
+    const key = raw.key ?? {}
+    const isGroup = typeof key.remoteJid === 'string' && isGroupJid(key.remoteJid)
+    const selfJids = this.env.selfJids?.() ?? []
+    // Bearbeiter: der Absender dieser Nachricht (bei einer Bearbeitung vom eigenen Handy: das eigene Konto).
+    const editors = key.fromMe ? selfJids : jidForms(isGroup ? [key.participant, key.participantAlt] : [key.remoteJid, key.remoteJidAlt])
+    // Original-Absender: so, wie die Originalnachricht ihn trug, ergaenzt um die Angaben im Zielschluessel.
+    const targetForms = target?.fromMe === true ? editors : jidForms([isGroup ? target?.participant : target?.remoteJid])
+    const decrypted = decryptSecretEdit({
+      secret: stored.secret,
+      targetId,
+      origSenders: [...stored.senders, ...targetForms, ...(target?.fromMe === true ? editors : [])],
+      editors,
+      iv,
+      payload,
+    })
+    if (!decrypted) {
+      this.log.warn('edit_decrypt_failed', { msg_id: targetId })
+      return true
+    }
+    if (!this.decodeMessage) {
+      this.log.warn('edit_decode_unavailable', { msg_id: targetId })
+      return true
+    }
+    let decoded: any
+    try {
+      decoded = this.decodeMessage(decrypted.plaintext)
+    } catch (err) {
+      this.log.warn('edit_decode_failed', { msg_id: targetId, ...errorFields(err) })
+      return true
+    }
+    // Der Klartext ist eine vollstaendige Nachricht, deren protocolMessage.editedMessage den neuen Inhalt traegt (so
+    // beschreibt es die Referenz); zur Sicherheit gilt auch ein direkt mitgelieferter Inhalt.
+    const inner = unwrap(decoded).content
+    const edited = inner?.protocolMessage?.editedMessage ?? decoded
+    if (editedTextOf(edited) === undefined) {
+      this.log.info('edit_without_text', { msg_id: targetId, kinds: kindsOf(unwrap(edited).content) })
+      return true
+    }
+    const at = toSeconds(inner?.protocolMessage?.timestampMs) ?? toSeconds(raw.messageTimestamp) ?? this.now()
+    this.log.info('edit_decrypted', { msg_id: targetId })
+    this.applyUpdate({ key: { id: targetId }, update: { message: { editedMessage: { message: edited } }, messageTimestamp: at } }, 0)
+    return true
   }
 
   // --- Wiederholung bei Schreibsperre (F02) -------------------------------------------------------
@@ -844,6 +1076,7 @@ export class MessageHandler {
         this.log.warn('event_push_failed', errorFields(err))
       }
     }
+    this.reconcileLidChats()
     this.log.info('history_handled', { ...stats, total: all.length })
     return stats
   }
@@ -859,15 +1092,19 @@ export class MessageHandler {
   }
 
   handleGroups(list: any[] | undefined): void {
+    const touched: string[] = []
     for (const g of list ?? []) {
       if (typeof g?.id === 'string' && typeof g?.subject === 'string') {
         this.jobs.upsertName(normalizeJid(g.id), g.subject, NAME_RANK.chat)
+        touched.push(normalizeJid(g.id))
       }
     }
+    this.refreshChatNames(touched)
   }
 
   handleLidMapping(m: { lid?: string; pn?: string } | undefined): void {
     this.learnLidMappings(m ? [m] : undefined)
+    this.reconcileLidChats()
   }
 
   private learnLidMappings(list: { lid?: string; pn?: string }[] | undefined): void {
@@ -879,6 +1116,7 @@ export class MessageHandler {
   }
 
   private learnContacts(list: any[] | undefined): void {
+    const touched = new Set<string>()
     for (const c of list ?? []) {
       if (typeof c?.id !== 'string') continue
       const ids = new Set<string>([normalizeJid(c.id)])
@@ -890,35 +1128,86 @@ export class MessageHandler {
       for (const id of ids) {
         if (typeof c.name === 'string') this.jobs.upsertName(id, c.name, NAME_RANK.contact)
         if (typeof c.notify === 'string') this.jobs.upsertName(id, c.notify, NAME_RANK.push)
+        touched.add(id)
       }
     }
+    this.refreshChatNames(touched)
+    if ([...touched].some(isLidJid)) this.reconcileLidChats()
   }
 
   private learnChats(list: any[] | undefined): void {
+    const touched: string[] = []
     for (const c of list ?? []) {
       const name = typeof c?.name === 'string' ? c.name : typeof c?.displayName === 'string' ? c.displayName : undefined
       if (typeof c?.id === 'string' && name) {
         this.jobs.upsertName(normalizeJid(c.id), name, NAME_RANK.chat)
+        touched.push(normalizeJid(c.id))
       }
       if (typeof c?.id === 'string' && isLidJid(c.id) && typeof c?.pnJid === 'string') {
         this.jobs.setLidMapping(normalizeJid(c.id), normalizeJid(c.pnJid))
+        touched.push(normalizeJid(c.id))
       }
+    }
+    this.refreshChatNames(touched)
+    if (touched.some(isLidJid)) this.reconcileLidChats()
+  }
+
+  /**
+   * Nach neu gelernten Namen: die Namen BESTEHENDER Chats nachziehen. Frueher erschien ein erst spaeter bekannt gewordener
+   * Name (Kontaktliste, Gruppenname) erst mit der naechsten Nachricht des Chats. Es entstehen nie neue Chats; geschrieben
+   * wird immer der bestbewertete bekannte Name, derselbe, den auch die naechste Nachricht schriebe. Rein lokal.
+   */
+  private refreshChatNames(jids: Iterable<string>): void {
+    const ids = new Set<string>()
+    for (const j of jids) {
+      ids.add(j)
+      const pn = isLidJid(j) ? this.jobs.pnForLid(j) : undefined
+      if (pn) ids.add(pn)
+    }
+    if (ids.size === 0) return
+    try {
+      let changed = 0
+      this.db.transaction(() => {
+        for (const id of ids) {
+          const name = this.env.nameOf(id)
+          if (name && renameChat(this.db, id, name)) changed++
+        }
+      })()
+      // Die Oberflaeche laedt bei diesem Ereignis die Chatliste neu (stored 0: es gibt keine neuen Nachrichten).
+      if (changed > 0) pushEvent(this.db, 'history_synced', { stored: 0 })
+    } catch (err) {
+      // Etwa eine Schreibsperre: der Name steht dann spaetestens mit der naechsten Nachricht des Chats da.
+      this.log.warn('chat_rename_failed', errorFields(err))
     }
   }
 
   // --- Kern -----------------------------------------------------------------------------------
 
   private processOne(raw: RawMessage, origin: 'live' | 'history', stats: HandleStats): void {
+    // Verschluesselte Bearbeitung (neues WhatsApp-Format): keine eigene Zeile, sondern Aenderung der Originalnachricht.
+    if (this.tryApplySecretEdit(raw)) {
+      stats.ignored++
+      return
+    }
     const n = normalizeMessage(raw, this.env)
     if (n.kind === 'ignored') {
       stats.ignored++
-      this.log.debug('message_ignored', { reason: n.reason })
+      // Nur Feldnamen der Nachricht, nie Inhalte. Live eingetroffene Nachrichten ohne Inhalt sind selten und verdienen eine
+      // sichtbare Zeile (sonst bleibt unbemerkt, in welcher Form WhatsApp etwas geschickt hat, das hier nichts ergibt).
+      const kinds = kindsOf(raw.message)
+      this.log.debug('message_ignored', { reason: n.reason, kinds })
+      if (origin === 'live' && (n.reason === 'no_content' || n.reason === 'stub')) {
+        this.log.info('message_ignored_live', { reason: n.reason, stub_type: raw.messageStubType ?? null, kinds })
+      }
       return
     }
     const m = n.message
     if (this.isExpired(m.waTimestamp, 'messages')) {
       stats.dropped++
       return
+    }
+    if (m.type === 'system' && m.text === PLACEHOLDER.unsupported) {
+      this.log.info('message_unsupported', { origin, kinds: kindsOf(unwrap(raw.message).content) })
     }
     if (m.pushName) this.jobs.upsertName(m.senderJid, m.pushName, NAME_RANK.push)
     if (m.viewOnceProbe) {
@@ -995,6 +1284,15 @@ export class MessageHandler {
       return
     }
     stats.stored++
+
+    if (m.msgSecret) {
+      // Fuer eine spaetere verschluesselte Bearbeitung dieser Nachricht (secretEdit.ts). Scheitert das, bleibt die Nachricht.
+      try {
+        this.jobs.putMsgSecret(m.id, m.msgSecret.senders, m.msgSecret.secret, m.waTimestamp, receivedAt)
+      } catch (err) {
+        this.log.warn('msg_secret_store_failed', errorFields(err))
+      }
+    }
 
     if (deferred) {
       try {

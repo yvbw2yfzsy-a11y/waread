@@ -81,6 +81,9 @@ export function audioPlayer(m: Message, track: (cleanup: () => void) => void): H
     'aria-valuemax': String(Math.round(total ?? 0)),
     'aria-valuenow': '0',
   }, ...bars);
+  // Der Daumen ist ein eigenes Element und gleitet stufenlos; die Balken leuchten auf, sobald er sie erreicht.
+  const thumb = el('span', { class: 'wave-thumb', 'aria-hidden': 'true' });
+  wave.append(thumb);
 
   const playBtn = el('button', { class: 'play', type: 'button', 'aria-label': 'Abspielen' }, icon('play', 22));
   const timeLbl = el('span', { class: 'voice-time' }, formatDuration(total));
@@ -95,13 +98,41 @@ export function audioPlayer(m: Message, track: (cleanup: () => void) => void): H
   const durationOf = (a: HTMLAudioElement | null): number =>
     a && Number.isFinite(a.duration) && a.duration > 0 ? a.duration : total ?? 0;
 
+  // paint() laeuft bei der Wiedergabe in jedem Bild (siehe startLoop): nur anfassen, was sich wirklich geaendert hat.
+  let lit = -1;
   const paint = (ratio: number): void => {
     const r = clamp(ratio, 0, 1);
     const upTo = Math.round(r * BARS);
-    bars.forEach((b, i) => b.classList.toggle('on', i < upTo));
+    if (upTo !== lit) {
+      bars.forEach((b, i) => b.classList.toggle('on', i < upTo));
+      lit = upTo;
+    }
+    thumb.style.left = `${(r * 100).toFixed(2)}%`;
     const dur = durationOf(audio);
-    wave.setAttribute('aria-valuenow', String(Math.round(r * dur)));
-    if (!broken) timeLbl.textContent = formatDuration(r > 0 ? r * dur : dur);
+    const sec = String(Math.round(r * dur));
+    if (wave.getAttribute('aria-valuenow') !== sec) wave.setAttribute('aria-valuenow', sec);
+    if (!broken) {
+      const label = formatDuration(r > 0 ? r * dur : dur);
+      if (timeLbl.textContent !== label) timeLbl.textContent = label;
+    }
+  };
+
+  // "timeupdate" feuert nur etwa viermal pro Sekunde: Der Fortschritt sprang. Waehrend der Wiedergabe laeuft deshalb ein
+  // Zeichenlauf pro Bild (requestAnimationFrame; steht im versteckten Tab von selbst still).
+  let frame = 0;
+  const stopLoop = (): void => {
+    if (frame) window.cancelAnimationFrame(frame);
+    frame = 0;
+  };
+  const startLoop = (): void => {
+    if (frame) return;
+    const step = (): void => {
+      frame = 0;
+      if (!audio || audio.paused || audio.ended) return;
+      if (!dragging) paint(audio.currentTime / durationOf(audio));
+      frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
   };
 
   const setPlaying = (playing: boolean): void => {
@@ -124,9 +155,9 @@ export function audioPlayer(m: Message, track: (cleanup: () => void) => void): H
     a.src = api.mediaUrl(m.id);
     a.playbackRate = speed;
     a.addEventListener('timeupdate', () => { if (!dragging) paint(a.currentTime / durationOf(a)); });
-    a.addEventListener('play', () => setPlaying(true));
-    a.addEventListener('pause', () => setPlaying(false));
-    a.addEventListener('ended', () => { setPlaying(false); paint(0); });
+    a.addEventListener('play', () => { setPlaying(true); startLoop(); });
+    a.addEventListener('pause', () => { setPlaying(false); stopLoop(); });
+    a.addEventListener('ended', () => { setPlaying(false); stopLoop(); paint(0); });
     a.addEventListener('error', fail);
     audio = a;
     return a;
@@ -185,10 +216,13 @@ export function audioPlayer(m: Message, track: (cleanup: () => void) => void): H
     seekTo((a.currentTime + (ev.key === 'ArrowRight' ? 5 : -5)) / dur);
   });
 
+  paint(0);
+
   const updateDot = (): void => { dot.hidden = m.fromMe || !!m.playedAt; };
   updateDot();
   track(on(`msg:${m.id}`, updateDot));
   track(() => {
+    stopLoop();
     if (!audio) return;
     audio.pause();
     audio.removeAttribute('src');

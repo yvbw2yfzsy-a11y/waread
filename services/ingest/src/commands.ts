@@ -23,6 +23,8 @@ export interface CommandsDeps {
   pollMs: number
   /** Abstand der Aufraeumlaeufe fuer zurueckgestellte Schluessel. Standard 10 Minuten. */
   housekeepingMs?: number
+  /** Raeumt zusaetzlich Nachrichten-Geheimnisse auf, die keine Bearbeitung mehr braucht; Rueckgabe: Zahl entfernter Eintraege. */
+  purgeSecrets?: () => number
   scheduler?: Scheduler
 }
 
@@ -102,6 +104,13 @@ export class IngestCommands {
       if (n > 0) this.d.log.info('deferred_purged', { removed: n })
     } catch (err) {
       this.d.log.warn('deferred_purge_failed', errorFields(err))
+    }
+    if (!this.d.purgeSecrets) return
+    try {
+      const n = this.d.purgeSecrets()
+      if (n > 0) this.d.log.info('msg_secrets_purged', { removed: n })
+    } catch (err) {
+      this.d.log.warn('msg_secrets_purge_failed', errorFields(err))
     }
   }
 }
