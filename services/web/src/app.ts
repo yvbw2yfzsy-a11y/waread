@@ -11,6 +11,7 @@ import {
   clientIp,
   type Ctx,
   forwardedHost,
+  hasJsonContentType,
   HttpError,
   isHttps,
   parseCookies,
@@ -141,6 +142,9 @@ export function createApp(o: AppOptions): RunningApp {
         routeLabel = m.route.pattern;
         ctx.params = m.params;
         if (!m.route.public && !auth.isValidToken(ctx.cookies[COOKIE_NAME])) throw new HttpError(401, 'unauthorized');
+        // Schreibende Anfragen verlangen application/json, auch ohne Body (siehe hasJsonContentType): sperrt "einfache"
+        // Anfragen fremder Seiten, die ohne Vorabanfrage durchgingen.
+        if ((method === 'POST' || method === 'PUT') && !hasJsonContentType(req)) throw new HttpError(415, 'unsupported_media_type');
         await m.route.handler(ctx);
         if (!res.headersSent && !res.writableEnded) throw new HttpError(500, 'no_response');
         return;

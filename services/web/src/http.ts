@@ -131,12 +131,21 @@ export function sendText(res: ServerResponse, status: number, text: string): voi
 // ---------- Anfrage-Eingaben ----------
 
 /**
+ * Traegt die Anfrage den Content-Type application/json? Schreibende Anfragen (POST, PUT) muessen ihn tragen, auch wenn sie
+ * keinen Body brauchen: Eine fremde Seite kann ihn ohne Vorabanfrage (Preflight) nicht setzen, und der Dienst sendet keine
+ * CORS-Freigabe. Damit reicht SameSite=Strict nicht allein, sondern es gibt eine zweite Sperre auch gegen Seiten
+ * desselben "Site" (andere Anwendung auf demselben Rechner, anderer Port).
+ */
+export function hasJsonContentType(req: IncomingMessage): boolean {
+  return String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase() === 'application/json';
+}
+
+/**
  * JSON-Body lesen. Verlangt Content-Type application/json: Formular-Posts (text/plain,
  * x-www-form-urlencoded) fremder Seiten werden damit zusaetzlich zu SameSite=Strict abgewiesen.
  */
 export async function readJson(c: Ctx, max = 65536): Promise<unknown> {
-  const ct = String(c.req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
-  if (ct !== 'application/json') throw new HttpError(415, 'unsupported_media_type');
+  if (!hasJsonContentType(c.req)) throw new HttpError(415, 'unsupported_media_type');
   const declared = Number(c.req.headers['content-length']);
   if (Number.isFinite(declared) && declared > max) {
     throw new HttpError(413, 'payload_too_large', undefined, { Connection: 'close' });
