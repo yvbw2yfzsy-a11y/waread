@@ -13,7 +13,7 @@ import { errorFields, type Logger } from './log.js'
 import { MediaQueue } from './mediaQueue.js'
 import { convertToAac } from './media/audio.js'
 import { createThumbnail } from './media/thumbnail.js'
-import { MessageHandler } from './messageHandler.js'
+import { MessageHandler, normalizeJid } from './messageHandler.js'
 import { StateCommands } from './stateCommand.js'
 import type { Scheduler } from './timing.js'
 import type { WaLib } from './waLib.js'
@@ -21,7 +21,7 @@ import type { WaLib } from './waLib.js'
 export interface ServiceDeps {
   cfg: IngestConfig
   log: Logger
-  lib: Pick<WaLib, 'createSocket' | 'downloadMedia'> & Partial<Pick<WaLib, 'downloadProfilePicture'>>
+  lib: Pick<WaLib, 'createSocket' | 'downloadMedia'> & Partial<Pick<WaLib, 'downloadProfilePicture' | 'decodeMessage'>>
   db: Database
   jobs: JobStore
   auth: AuthStore
@@ -87,7 +87,29 @@ export function createService(d: ServiceDeps): Service {
     isExpired: (ts) => (handler ? handler.isExpired(ts, 'media') : false),
     ...(d.scheduler ? { scheduler: d.scheduler } : {}),
   })
-  const h = new MessageHandler({ db, jobs, media: queue, cfg, log, ...(d.scheduler ? { scheduler: d.scheduler } : {}) })
+  const decodeMessage = d.lib.decodeMessage
+  const h = new MessageHandler({
+    db,
+    jobs,
+    media: queue,
+    cfg,
+    log,
+    ...(d.scheduler ? { scheduler: d.scheduler } : {}),
+    // Fuer verschluesselte Bearbeitungen: Nachrichtenbytes lesen und die eigenen Kennungen des Kontos kennen.
+    ...(decodeMessage ? { decodeMessage: (bytes: Uint8Array) => decodeMessage(bytes) } : {}),
+    selfJids: () => {
+      const me = auth.state.creds?.me as { id?: unknown; lid?: unknown } | undefined
+      return [me?.id, me?.lid].filter((j): j is string => typeof j === 'string' && j !== '').map(normalizeJid)
+    },
+    // Zuordnungen, die die Bibliothek selbst fuehrt (Schluesselspeicher "lid-mapping": "<LID>_reverse" -> Nummer).
+    libPnForLid: (lid) => {
+      const user = lid.split('@')[0] ?? ''
+      if (!/^\d{3,25}$/.test(user)) return undefined
+      const got = auth.state.keys.get('lid-mapping', [`${user}_reverse`]) as Record<string, unknown> | undefined
+      const pnUser = got?.[`${user}_reverse`]
+      return typeof pnUser === 'string' && /^\d{4,20}$/.test(pnUser) ? `${pnUser}@s.whatsapp.net` : undefined
+    },
+  })
   handler = h
 
   conn = new ConnectionManager({
@@ -101,7 +123,12 @@ export function createService(d: ServiceDeps): Service {
     // F14: Nach einer Abmeldung gehoeren Namen und Nummernzuordnung dem alten Konto.
     onSessionReset: () => {
       const n = jobs.clearIdentityData()
-      log.info('state_identity_cleared', { names: n.names, lid_mappings: n.lidMappings, why: 'logged_out' })
+      log.info('state_identity_cleared', {
+        names: n.names,
+        lid_mappings: n.lidMappings,
+        msg_secrets: n.msgSecrets,
+        why: 'logged_out',
+      })
     },
     listeners: {
       'messages.upsert': (arg) => h.handleUpsert(arg),
@@ -138,6 +165,7 @@ export function createService(d: ServiceDeps): Service {
     queue,
     ...(avatars ? { avatars } : {}),
     log,
+    purgeSecrets: () => h.purgeSecrets(),
     pollMs: cfg.connection.commandPollMs,
     ...(d.scheduler ? { scheduler: d.scheduler } : {}),
   })
@@ -150,6 +178,7 @@ export function createService(d: ServiceDeps): Service {
     start() {
       queue.recover()
       queue.start()
+      h.reconcileLidChats() // Chats, die dieselbe Person als LID und als Nummer zeigen, zusammenfuehren
       stateCommands.start() // vor dem Verbindungsaufbau: ein wartender Befehl wirkt, bevor neue Namen eintreffen
       commands.start()
       connection.start()

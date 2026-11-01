@@ -119,6 +119,11 @@ export interface WaLib extends AuthLib {
   downloadMedia(target: DownloadTarget): Promise<Readable>
   /** Laedt ein Profilbild von der Adresse aus `profilePicture` (HTTPS, nur *.whatsapp.net, ohne Weiterleitung). */
   downloadProfilePicture(url: string): Promise<Buffer>
+  /**
+   * Liest die Bytes einer WhatsApp-Nachricht (protobuf proto.Message). Rein lokal, ohne Netzwerk. Gebraucht fuer
+   * verschluesselte Bearbeitungen: Nach der Entschluesselung (secretEdit.ts) liegt der neue Inhalt als solche Bytes vor.
+   */
+  decodeMessage(bytes: Uint8Array): unknown
 }
 
 /** Obergrenze je Profilbild-Datei (Schutz vor Missbrauch). Wie gross WhatsApps Bilder tatsaechlich sind, ist hier nicht gemessen. */
@@ -225,6 +230,7 @@ export async function loadWaLib(log: Logger, importer: ModuleImporter = defaultI
     initAuthCreds: pick('initAuthCreds'),
     BufferJSON: pick('BufferJSON'),
     reviveAppStateSyncKey: (obj) => proto.Message.AppStateSyncKeyData.fromObject(obj),
+    decodeMessage: (bytes) => proto.Message.decode(bytes),
 
     createSocket({ auth }) {
       const raw = makeWASocket({

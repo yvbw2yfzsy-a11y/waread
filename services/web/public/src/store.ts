@@ -8,6 +8,7 @@
 
 import { api } from './api';
 import { toast } from './components/toast';
+import { mergeMessages } from './messageOrder';
 import type { Chat, ChatPreview, MediaInfo, Message, MessageUpdate, Settings, StatusInfo } from './types';
 import { debounce } from './util';
 
@@ -119,16 +120,10 @@ export const refreshChatsSoon = debounce(() => {
 // Messages
 // ---------------------------------------------------------------------------
 
-function mergeInto(chatId: string, incoming: Message[]): Message[] {
+function mergeInto(chatId: string, incoming: Message[], where: 'start' | 'end' = 'end'): Message[] {
   const list = state.messages.get(chatId) ?? [];
-  const added: Message[] = [];
-  const known = new Map(list.map((m, i) => [m.id, i]));
-  for (const m of incoming) {
-    const idx = known.get(m.id);
-    if (idx === undefined) { list.push(m); added.push(m); } else { list[idx] = m; }
-    state.byId.set(m.id, m);
-  }
-  list.sort((a, b) => a.waTimestamp - b.waTimestamp || a.id.localeCompare(b.id));
+  const added = mergeMessages(list, incoming, where);
+  for (const m of incoming) state.byId.set(m.id, m);
   state.messages.set(chatId, list);
   return added;
 }
@@ -146,7 +141,7 @@ export async function loadOlder(chatId: string): Promise<Message[]> {
   const oldest = list[0];
   if (!oldest || state.hasMore.get(chatId) === false) return [];
   const page = await api.messages(chatId, { waTimestamp: oldest.waTimestamp, id: oldest.id }, PAGE);
-  const added = mergeInto(chatId, page);
+  const added = mergeInto(chatId, page, 'start'); // aeltere Seite: bei gleicher Sekunde vor den vorhandenen
   state.hasMore.set(chatId, page.length >= PAGE && added.length > 0);
   return added;
 }

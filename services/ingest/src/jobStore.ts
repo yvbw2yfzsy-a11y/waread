@@ -11,10 +11,12 @@ import type { MediaKind } from './config.js'
  * Hier liegen deshalb:
  *   - media_jobs: Warteschlange samt Deskriptor (ueberlebt Neustarts),
  *   - names:      Anzeigenamen mit Rangfolge (damit Namen nach einem Neustart nicht "schlechter" werden),
- *   - lid_map:    Zuordnung LID <-> Telefonnummer.
+ *   - lid_map:    Zuordnung LID <-> Telefonnummer,
+ *   - msg_secrets: messageContextInfo.messageSecret je Nachricht. Ohne dieses Geheimnis der URSPRUENGLICHEN Nachricht laesst
+ *                 sich eine spaetere Bearbeitung im neuen, verschluesselten Format nicht lesen (siehe secretEdit.ts).
  *
- * Der Inhalt ist sensibel (mediaKey entschluesselt Medien) -> Datei 0600, nie in Backups
- * (/var/lib/waread gehoert nicht in Sicherungen).
+ * Der Inhalt ist sensibel (mediaKey entschluesselt Medien, messageSecret entschluesselt Bearbeitungen) -> Datei 0600,
+ * nie in Backups (/var/lib/waread gehoert nicht in Sicherungen).
  */
 
 /** Alles, was zum Herunterladen und Entschluesseln eines Mediums noetig ist (Binaerwerte als base64). */
@@ -65,6 +67,15 @@ interface JobRow {
   forced?: number
 }
 
+/** Geheimnis einer Nachricht samt den Schreibweisen ihres Absenders (zum Entschluesseln einer spaeteren Bearbeitung). */
+export interface MsgSecret {
+  messageId: string
+  /** Schreibweisen der JID des Absenders ohne Geraetesuffix (LID und/oder Nummer). */
+  senders: string[]
+  secret: Buffer
+  waTimestamp: number
+}
+
 /** Schluessel eines Mediums, das nicht (oder nicht fertig) geladen wurde und auf Wunsch noch geladen werden kann. */
 export interface DeferredMedia {
   messageId: string
@@ -107,6 +118,13 @@ export class JobStore {
       CREATE TABLE IF NOT EXISTS lid_map (
         lid TEXT PRIMARY KEY,
         pn TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS msg_secrets (
+        message_id TEXT PRIMARY KEY,
+        senders TEXT NOT NULL,
+        secret BLOB NOT NULL,
+        wa_timestamp INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
       );
     `)
     // Spalte "forced" kam spaeter dazu: bei bestehenden Dateien nachziehen.
@@ -237,10 +255,48 @@ export class JobStore {
    * F14: Entfernt alle gespeicherten Anzeigenamen und die LID<->Nummer-Zuordnung (personenbezogen). Die Medienaufgaben
    * bleiben unberuehrt. Gibt die Anzahl entfernter Zeilen zurueck.
    */
-  clearIdentityData(): { names: number; lidMappings: number } {
+  clearIdentityData(): { names: number; lidMappings: number; msgSecrets: number } {
     const names = this.db.prepare('DELETE FROM names').run().changes
     const lidMappings = this.db.prepare('DELETE FROM lid_map').run().changes
-    return { names, lidMappings }
+    const msgSecrets = this.db.prepare('DELETE FROM msg_secrets').run().changes
+    return { names, lidMappings, msgSecrets }
+  }
+
+  // --- Nachrichten-Geheimnisse (fuer verschluesselte Bearbeitungen) ----------------------------------
+
+  /** Merkt sich das Geheimnis einer Nachricht. Ein vorhandener Eintrag bleibt unveraendert (die erste Fassung gilt). */
+  putMsgSecret(messageId: string, senders: readonly string[], secret: Uint8Array, waTimestamp: number, now = nowSec()): void {
+    this.db
+      .prepare(
+        `INSERT INTO msg_secrets (message_id, senders, secret, wa_timestamp, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(message_id) DO NOTHING`,
+      )
+      .run(messageId, JSON.stringify([...new Set(senders)]), Buffer.from(secret), waTimestamp, now)
+  }
+
+  getMsgSecret(messageId: string): MsgSecret | undefined {
+    const r = this.db.prepare('SELECT * FROM msg_secrets WHERE message_id = ?').get(messageId) as
+      | { message_id: string; senders: string; secret: Uint8Array; wa_timestamp: number }
+      | undefined
+    if (!r) return undefined
+    let senders: string[] = []
+    try {
+      const parsed: unknown = JSON.parse(r.senders)
+      if (Array.isArray(parsed)) senders = parsed.filter((s): s is string => typeof s === 'string')
+    } catch {
+      /* beschaedigte Zeile: ohne Absender-Schreibweisen bleibt nur der Versuch mit denen der Bearbeitung */
+    }
+    return { messageId: r.message_id, senders, secret: Buffer.from(r.secret), waTimestamp: r.wa_timestamp }
+  }
+
+  /** Entfernt Geheimnisse von Nachrichten, die vor `olderThan` (Unix-Sekunden, WhatsApp-Zeitstempel) geschrieben wurden. */
+  pruneMsgSecrets(olderThan: number): number {
+    return this.db.prepare('DELETE FROM msg_secrets WHERE wa_timestamp < ?').run(olderThan).changes
+  }
+
+  countMsgSecrets(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM msg_secrets').get() as { n: number }).n
   }
 
   // --- LID <-> Telefonnummer -----------------------------------------------------------------
