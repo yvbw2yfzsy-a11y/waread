@@ -50,10 +50,3 @@ export function errFields(err: unknown): Fields {
   }
   return { errName: typeof err };
 }
-
-export const nullLogger: Logger = {
-  debug() {},
-  info() {},
-  warn() {},
-  error() {},
-};

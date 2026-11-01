@@ -3,9 +3,9 @@
 // Quelle der Wahrheit ist die settings-Tabelle (vom Ingest geschrieben, siehe services/ingest/src/config.ts,
 // SETTING_KEYS): connection.status, connection.connected_since, connection.qr. Der QR-Code liegt bewusst
 // NICHT in der events_outbox (kurzlebiges Kopplungsgeheimnis); die Outbox-Ereignisse 'connection_status'
-// sind nur der Anstoss, den Zustand neu zu lesen. Eine aeltere Konvention (Outbox-Ereignis 'qr' mit
-// { qr }) wird weiterhin verstanden (applyQr), vom Ingest aber nicht mehr erzeugt.
-// 'qr' wird NIE per SSE weitergereicht: wer den QR-Code sieht, kann das WhatsApp-Konto verknuepfen.
+// sind nur der Anstoss, den Zustand neu zu lesen (syncFromSettings). Ein Outbox-Ereignis 'qr' (aeltere
+// Konvention) erzeugt der Ingest nicht mehr; kommt eines vor, wird es ignoriert und nie weitergereicht:
+// wer den QR-Code sieht, kann das WhatsApp-Konto verknuepfen.
 
 export type ConnState = 'connected' | 'connecting' | 'disconnected' | 'needs_qr';
 
@@ -20,24 +20,10 @@ export interface StatusView {
   since?: number;
 }
 
-function asRecord(v: unknown): Record<string, unknown> | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-}
-
 export class ConnectionState {
   private state: ConnState = 'disconnected';
   private since: number | undefined;
   private qr: string | null = null;
-
-  /** Gibt die bereinigte Statusansicht zurueck oder null, wenn die Payload unbrauchbar ist. */
-  applyStatus(payload: unknown): StatusView | null {
-    const p = asRecord(payload);
-    if (!p || !isConnState(p['state'])) return null;
-    this.state = p['state'];
-    this.since = typeof p['since'] === 'number' && Number.isFinite(p['since']) ? p['since'] : undefined;
-    if (this.state !== 'needs_qr') this.qr = null;
-    return this.getStatus();
-  }
 
   /**
    * Zustand aus der settings-Tabelle uebernehmen (autoritativ). `read` liefert den Wert eines Schluessels
@@ -52,14 +38,6 @@ export class ConnectionState {
     const qr = read('connection.qr');
     this.qr = this.state === 'needs_qr' && qr !== null && qr !== '' && qr.length <= 200_000 ? qr : null;
     return this.getStatus();
-  }
-
-  applyQr(payload: unknown): void {
-    const p = asRecord(payload);
-    if (!p) return;
-    const q = p['qr'];
-    if (q === null) this.qr = null;
-    else if (typeof q === 'string' && q.length > 0 && q.length <= 200_000) this.qr = q;
   }
 
   getStatus(): StatusView {

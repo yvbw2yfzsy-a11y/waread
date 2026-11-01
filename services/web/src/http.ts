@@ -141,11 +141,10 @@ export function hasJsonContentType(req: IncomingMessage): boolean {
 }
 
 /**
- * JSON-Body lesen. Verlangt Content-Type application/json: Formular-Posts (text/plain,
- * x-www-form-urlencoded) fremder Seiten werden damit zusaetzlich zu SameSite=Strict abgewiesen.
+ * JSON-Body lesen (hoechstens `max` Bytes). Den Content-Type application/json prueft schon app.ts fuer jede
+ * schreibende Anfrage, bevor eine Route laeuft; hier muss er nicht noch einmal geprueft werden.
  */
 export async function readJson(c: Ctx, max = 65536): Promise<unknown> {
-  if (!hasJsonContentType(c.req)) throw new HttpError(415, 'unsupported_media_type');
   const declared = Number(c.req.headers['content-length']);
   if (Number.isFinite(declared) && declared > max) {
     throw new HttpError(413, 'payload_too_large', undefined, { Connection: 'close' });

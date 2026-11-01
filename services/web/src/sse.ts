@@ -6,7 +6,7 @@
 //   statt die Payload des Absenders durchzureichen. Dadurch haben Events dieselbe Form wie die
 //   REST-Objekte, enthalten keine Dateisystempfade und beachten hide_deleted_content.
 //   Aus der Absender-Payload wird nur die Nachrichten-ID gebraucht.
-// - Typ 'qr' wird nie weitergereicht (siehe connection.ts).
+// - Der QR-Code wird nie weitergereicht (siehe connection.ts); ein Outbox-Ereignis 'qr' ist unbekannt und wird verworfen.
 // - SSE-IDs sind die Outbox-IDs; Last-Event-ID wird bei Wiederverbindung nachgespielt (soweit noch
 //   in der Outbox vorhanden).
 import type { ServerResponse } from 'node:http';
@@ -196,14 +196,8 @@ export class EventPump {
   }
 
   private handle(ev: { id: number; type: string; payload: unknown }): void {
-    if (ev.type === 'qr') {
-      this.conn.applyQr(ev.payload);
-      return;
-    }
-    if (ev.type === 'connection_status') {
-      this.conn.applyStatus(ev.payload);
-      this.syncConnection(); // autoritativ (inkl. QR) aus der settings-Tabelle
-    }
+    // Das Ereignis ist nur der Anstoss: der Zustand (inkl. QR) steht autoritativ in der settings-Tabelle.
+    if (ev.type === 'connection_status') this.syncConnection();
     const out = this.transform(ev);
     if (out) this.hub.broadcast(out.name, out.data, ev.id);
   }
@@ -285,7 +279,7 @@ export class EventPump {
     }
   }
 
-  /** Outbox klein halten: letzte KEEP_ROWS Zeilen plus je das neueste connection_status-/qr-Ereignis. */
+  /** Outbox klein halten: letzte KEEP_ROWS Zeilen plus das neueste connection_status-Ereignis. */
   private maybePurge(): void {
     const now = Date.now();
     if (now - this.lastPurge < PURGE_EVERY_MS) return;
@@ -295,7 +289,7 @@ export class EventPump {
         this.db,
         `DELETE FROM events_outbox
           WHERE id < (SELECT COALESCE(MAX(id), 0) FROM events_outbox) - ?
-            AND id NOT IN (SELECT MAX(id) FROM events_outbox WHERE type IN ('connection_status', 'qr') GROUP BY type)`,
+            AND id NOT IN (SELECT MAX(id) FROM events_outbox WHERE type = 'connection_status')`,
         KEEP_ROWS,
       );
     } catch (err) {

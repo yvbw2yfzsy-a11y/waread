@@ -6,24 +6,9 @@
 // verlangt sie immer (so ist bewiesen, dass der Passkey funktioniert, bevor das Passwort abgeschaltet wird).
 import { COOKIE_NAME } from '../auth.js';
 import type { App } from '../context.js';
-import { asObject, type Ctx, HttpError, readJson, type Router, sendJson, serializeCookie } from '../http.js';
+import { asObject, HttpError, readJson, type Router, sendJson } from '../http.js';
 import { STEP_PURPOSES, type StepPurpose } from '../passkeys.js';
-
-function cookieSecure(app: App, c: Ctx): boolean {
-  const s = app.cfg.web.cookieSecure;
-  return s === 'auto' ? c.https : s;
-}
-
-function setSessionCookie(app: App, c: Ctx, seconds: number): void {
-  c.res.setHeader(
-    'Set-Cookie',
-    serializeCookie(COOKIE_NAME, app.auth.issueToken(seconds), {
-      path: app.cfg.web.cookiePath,
-      maxAgeSec: seconds,
-      secure: cookieSecure(app, c),
-    }),
-  );
-}
+import { setSessionCookie } from './auth.js';
 
 function rateLimited(retryAfterSec: number): HttpError {
   return new HttpError(429, 'too_many_attempts', { retryAfterSeconds: retryAfterSec }, { 'Retry-After': String(retryAfterSec) });

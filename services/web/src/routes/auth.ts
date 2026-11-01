@@ -7,6 +7,18 @@ function cookieSecure(app: App, c: Ctx): boolean {
   return s === 'auto' ? c.https : s;
 }
 
+/** Stellt ein Sitzungs-Cookie aus (Passwort- und Passkey-Anmeldung, Ein-/Ausschalten der Passkey-Sperre). */
+export function setSessionCookie(app: App, c: Ctx, seconds: number): void {
+  c.res.setHeader(
+    'Set-Cookie',
+    serializeCookie(COOKIE_NAME, app.auth.issueToken(seconds), {
+      path: app.cfg.web.cookiePath,
+      maxAgeSec: seconds,
+      secure: cookieSecure(app, c),
+    }),
+  );
+}
+
 export function registerAuthRoutes(r: Router, app: App): void {
   r.add(
     'POST',
@@ -43,14 +55,7 @@ export function registerAuthRoutes(r: Router, app: App): void {
       }
 
       app.limiter.reset(c.ip);
-      c.res.setHeader(
-        'Set-Cookie',
-        serializeCookie(COOKIE_NAME, app.auth.issueToken(), {
-          path: app.cfg.web.cookiePath,
-          maxAgeSec: app.auth.sessionSeconds,
-          secure: cookieSecure(app, c),
-        }),
-      );
+      setSessionCookie(app, c, app.auth.sessionSeconds);
       app.log.info('login_ok', { ip: c.ip });
       sendJson(c.res, 200, { ok: true });
     },
