@@ -17,6 +17,7 @@ Stand: Version 0.2.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohn
 | `services/web/` | REST-/SSE-Backend (`src/`), Frontend-Quellen (`public/`), Browsertest |
 | `cleanup/` | Aufbewahrung durchsetzen, stündlich; wöchentlich mit VACUUM |
 | `config/` | `config.example.toml` (alle gelesenen Schlüssel) |
+| `install.sh` | Komplettinstallation auf dem Pi: von GitHub holen, bauen, installieren, starten (ruft `deploy/install.sh` auf) |
 | `deploy/` | `install.sh`, `waread-update`, `make-release.sh`, systemd-Units, Nginx-Ausschnitt |
 | `docs/` | Installation, Betrieb, Sicherheitsprüfung, Testliste, Zusammenführungsnotizen |
 
@@ -31,7 +32,14 @@ npm test                    # alle Testläufe
 npm run check:no-send       # nur der Sende-Wächter
 ```
 
-Installation auf dem Pi, Konfiguration, Kopplung und die Prüfungen vor dem Hauptkonto beschreibt `docs/INSTALL.md`. Reihenfolge, die nicht umgangen werden sollte: bauen und testen, installieren, mit einer **Testnummer** koppeln, Zweitnummer-Test bestehen, erst dann das Hauptkonto.
+**Auf dem Raspberry Pi in einem Schritt:** `install.sh` im Wurzelordner holt waread von GitHub, baut, testet und installiert es und fragt das Anmeldepasswort ab. Es läuft als root, lies es vorher (Ablauf und Optionen: `docs/INSTALL.md`, Abschnitt „Abkürzung“):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/yvbw2yfzsy-a11y/waread/main/install.sh
+sudo bash install.sh
+```
+
+Installation auf dem Pi von Hand, Konfiguration, Kopplung und die Prüfungen vor dem Hauptkonto beschreibt `docs/INSTALL.md`. Reihenfolge, die nicht umgangen werden sollte: bauen und testen, installieren, mit einer **Testnummer** koppeln, Zweitnummer-Test bestehen, erst dann das Hauptkonto.
 
 ## Dokumentation
 

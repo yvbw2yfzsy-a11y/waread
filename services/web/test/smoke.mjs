@@ -116,7 +116,9 @@ const logs = [];
 const log = createLogger('debug', (l) => logs.push(l));
 const PORT = Number(process.env.SMOKE_PORT ?? 18787);
 const cfg = buildConfig({
-  web: { port: PORT, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session.key'), login_max_attempts: 5, hide_deleted_content: true },
+  // passkey_file im Temp-Ordner: Der Standardpfad /var/lib/waread/passkeys.json gehört auf einem Pi mit installiertem waread dem
+  // Benutzer waread. Ein anderer Benutzer (z. B. beim Bau durch install.sh) bekäme "unlesbar", die Sperre bliebe zu, kein Login ginge.
+  web: { port: PORT, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session.key'), passkey_file: path.join(tmp, 'none.json'), login_max_attempts: 5, hide_deleted_content: true },
   paths: { db: dbFile, media_dir: mediaDir },
 });
 const fakeVerifier = async (hash, pw) => { await sleep(5); return hash === '$argon2id$test' && pw === 'correct horse battery'; };
@@ -672,7 +674,7 @@ ok('Chats nach clear all leer', r.status === 200 && r.json.length === 0);
 
   // Loeschmarke: Standard (Inhalt zeigen) und hide_deleted_content = true (Hauptinstanz)
   client.markMessageDeleted(db, 'v3', T2 + 200);
-  const cfg3 = buildConfig({ web: { port: PORT + 2, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session3.key') }, paths: { db: dbFile, media_dir: mediaDir } });
+  const cfg3 = buildConfig({ web: { port: PORT + 2, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session3.key'), passkey_file: path.join(tmp, 'none.json') }, paths: { db: dbFile, media_dir: mediaDir } });
   ok('V2 Standard: hide_deleted_content ist aus', cfg3.web.hideDeletedContent === false);
   const app3 = createApp({ cfg: cfg3, db, log: createLogger('error', () => {}), verifier: fakeVerifier });
   await app3.listen();
@@ -783,7 +785,7 @@ ok('logout loescht Cookie (Max-Age=0)', r.status === 200 && /Max-Age=0/.test(lc)
 
 // -- Origin-Pruefung (zweite Instanz, opt-in)
 {
-  const cfg2 = buildConfig({ web: { port: PORT + 1, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session2.key'), check_origin: true }, paths: { db: dbFile, media_dir: mediaDir } });
+  const cfg2 = buildConfig({ web: { port: PORT + 1, password_hash: '$argon2id$test', public_dir: pubDir, session_secret_file: path.join(tmp, 'session2.key'), passkey_file: path.join(tmp, 'none.json'), check_origin: true }, paths: { db: dbFile, media_dir: mediaDir } });
   const app2 = createApp({ cfg: cfg2, db, log: createLogger('error', () => {}), verifier: fakeVerifier });
   await app2.listen();
   const body = { password: 'correct horse battery' };

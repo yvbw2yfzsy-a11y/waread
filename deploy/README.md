@@ -52,7 +52,9 @@ deploy/make-release.sh         # schreibt release-out/waread-<version>.tar.gz un
 
 ## Installation
 
-Das Release (gebaut, siehe A1–A4) liegt entpackt irgendwo auf dem Pi, `install.sh` kopiert es von dort:
+Alles in einem Zug (Pakete, Node.js, von GitHub holen, bauen, testen, dieses Skript, Passwort, Start): `install.sh` im Wurzelordner des Projekts. Es ruft das Skript dieses Ordners mit `--no-start` auf (`docs/INSTALL.md`, Abschnitt „Abkürzung“).
+
+Von Hand: Das Release (gebaut, siehe A1–A4) liegt entpackt irgendwo auf dem Pi, `install.sh` kopiert es von dort:
 
 ```sh
 sudo ./deploy/install.sh              # Version aus VERSION oder package.json
