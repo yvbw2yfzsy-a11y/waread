@@ -89,6 +89,52 @@ export function upsertChat(
   });
 }
 
+/**
+ * Setzt den Namen eines BESTEHENDEN Chats (legt nie einen an). true, wenn sich der Name geaendert hat.
+ * Leere Namen aendern nichts. Der Trigger trg_chats_au_name zieht chat_name im Suchindex nach.
+ * Gebraucht, wenn ein Name erst nach der ersten Nachricht bekannt wird (Kontaktliste, Gruppenname): Ohne diesen Aufruf
+ * erschien er erst mit der naechsten Nachricht des Chats.
+ */
+export function renameChat(db: Database, id: string, name: string): boolean {
+  const n = name.trim();
+  if (n === '') return false;
+  return db.prepare('UPDATE chats SET name = ? WHERE id = ? AND name IS NOT ?').run(n, id, n).changes > 0;
+}
+
+/**
+ * Fuehrt den Chat `fromId` in den Chat `toId` zusammen: Alle Nachrichten ziehen um, der Quell-Chat verschwindet. Gebraucht,
+ * wenn dieselbe Person erst unter ihrer LID und spaeter unter ihrer Telefonnummer auftaucht (zwei Chats statt einem).
+ * Gibt es `toId` noch nicht, entsteht er aus den Angaben des Quell-Chats. Ein vorhandener Name, Avatar und die neuere
+ * Aktivitaet des Ziels gewinnen. Der Suchindex folgt (chat_name der verschobenen Nachrichten). Mediendateien bleiben, wo sie
+ * sind (die media-Zeilen haengen an der Nachricht, nicht am Chat). Alles in einer Transaktion; unbekannter Quell-Chat: nichts.
+ */
+export function mergeChats(db: Database, fromId: string, toId: string): { moved: number } {
+  if (fromId === toId) return { moved: 0 };
+  return db
+    .transaction((): { moved: number } => {
+      const from = db
+        .prepare('SELECT name, is_group AS isGroup, avatar_path AS avatarPath, last_activity_at AS lastActivityAt FROM chats WHERE id = ?')
+        .get(fromId) as { name: string | null; isGroup: number; avatarPath: string | null; lastActivityAt: number | null } | undefined;
+      if (!from) return { moved: 0 };
+      db.prepare(
+        `INSERT INTO chats (id, name, is_group, avatar_path, last_activity_at) VALUES (@id, @name, @isGroup, @avatarPath, @lastActivityAt)
+         ON CONFLICT(id) DO UPDATE SET
+           name = COALESCE(NULLIF(chats.name, ''), excluded.name),
+           avatar_path = COALESCE(chats.avatar_path, excluded.avatar_path),
+           last_activity_at = MAX(COALESCE(chats.last_activity_at, 0), COALESCE(excluded.last_activity_at, 0))`,
+      ).run({ id: toId, name: from.name, isGroup: from.isGroup, avatarPath: from.avatarPath, lastActivityAt: from.lastActivityAt });
+      const moved = db.prepare('UPDATE messages SET chat_id = ? WHERE chat_id = ?').run(toId, fromId).changes;
+      // Der Suchindex fuehrt den Chatnamen je Nachricht; nach dem Umzug muss er der des Ziels sein (auch fuer dessen alte).
+      db.prepare(
+        `UPDATE messages_fts SET chat_name = (SELECT name FROM chats WHERE id = ?)
+         WHERE rowid IN (SELECT fts_rowid FROM messages_fts_map WHERE message_id IN (SELECT id FROM messages WHERE chat_id = ?))`,
+      ).run(toId, toId);
+      db.prepare('DELETE FROM chats WHERE id = ?').run(fromId);
+      return { moved };
+    })
+    .immediate();
+}
+
 // ---------------------------------------------------------------------------
 // Nachrichten
 // ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import {
   openDb,
   runMigrations,
   upsertChat,
+  renameChat,
+  mergeChats,
   insertMessageIfNotExists,
   updateMessageText,
   markMessageDeleted,
@@ -143,6 +145,112 @@ describe('Chats', () => {
     assert.deepEqual(searchMessages(db, 'familie'), []);
     assert.deepEqual(ids(searchMessages(db, 'arbeit')), [m.id]);
     assertFtsConsistent(db);
+  });
+
+  it('renameChat: benennt nur bestehende Chats um, meldet Aenderungen, ignoriert leere und gleiche Namen', () => {
+    const db = freshDb();
+    const m = msg({ text: 'irgendwas' });
+    insertMessageIfNotExists(db, m);
+    assert.equal(renameChat(db, 'c1', 'Arbeit'), true);
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c1'), 'Arbeit');
+    assert.equal(renameChat(db, 'c1', 'Arbeit'), false, 'gleicher Name: keine Aenderung');
+    assert.equal(renameChat(db, 'c1', '   '), false, 'leerer Name aendert nichts');
+    assert.equal(renameChat(db, 'c1', ''), false);
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c1'), 'Arbeit');
+    assert.equal(renameChat(db, 'gibt-es-nicht', 'Name'), false);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats WHERE id = ?', 'gibt-es-nicht'), 0, 'legt nie einen Chat an');
+    assert.equal(renameChat(db, 'c1', '  Beruf  '), true);
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c1'), 'Beruf', 'Leerraum am Rand entfaellt');
+    assert.deepEqual(searchMessages(db, 'arbeit'), []);
+    assert.deepEqual(ids(searchMessages(db, 'beruf')), [m.id], 'der Suchindex folgt (Trigger)');
+    assertFtsConsistent(db);
+  });
+
+  it('renameChat: ein Chat ohne Namen (NULL) bekommt einen', () => {
+    const db = freshDb();
+    upsertChat(db, { id: 'c9', name: '', isGroup: false, lastActivityAt: 5 });
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c9'), null);
+    assert.equal(renameChat(db, 'c9', 'Neu'), true);
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'c9'), 'Neu');
+  });
+});
+
+describe('Chats zusammenfuehren (dieselbe Person als LID und als Nummer)', () => {
+  function two(): Database {
+    const db = openDb(':memory:');
+    runMigrations(db);
+    upsertChat(db, { id: 'lid1@lid', name: 'Anna (LID)', isGroup: false, avatarPath: 'avatars/lid.jpg', lastActivityAt: 100 });
+    upsertChat(db, { id: 'pn1@s.whatsapp.net', name: 'Anna', isGroup: false, lastActivityAt: 200 });
+    for (const [i, chat] of [[1, 'lid1@lid'], [2, 'lid1@lid'], [3, 'pn1@s.whatsapp.net']] as const) {
+      insertMessageIfNotExists(db, { id: `m${i}`, chatId: chat, sender: 'Anna', waTimestamp: 100 + i, receivedAt: 100 + i, direction: 'in', type: 'text', text: `wort${i}` });
+    }
+    return db;
+  }
+
+  it('alle Nachrichten ziehen um, der Quell-Chat verschwindet, der Name des Ziels gewinnt', () => {
+    const db = two();
+    assert.deepEqual(mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net'), { moved: 2 });
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats'), 1);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM messages WHERE chat_id = ?', 'pn1@s.whatsapp.net'), 3);
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'pn1@s.whatsapp.net'), 'Anna');
+    assert.equal(scalar(db, 'SELECT avatar_path FROM chats WHERE id = ?', 'pn1@s.whatsapp.net'), 'avatars/lid.jpg', 'fehlender Avatar kommt vom Quell-Chat');
+    assert.equal(scalar(db, 'SELECT last_activity_at FROM chats WHERE id = ?', 'pn1@s.whatsapp.net'), 200, 'die neuere Aktivitaet gewinnt');
+    assertFtsConsistent(db);
+  });
+
+  it('der Suchindex zeigt danach bei allen Nachrichten den Namen des Ziels', () => {
+    const db = two();
+    mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net');
+    assert.deepEqual(ids(searchMessages(db, 'wort1')), ['m1']);
+    assert.equal(scalar(db, "SELECT COUNT(*) FROM messages_fts WHERE chat_name = 'Anna'"), 3);
+    assert.equal(scalar(db, "SELECT COUNT(*) FROM messages_fts WHERE chat_name = 'Anna (LID)'"), 0);
+  });
+
+  it('gibt es das Ziel noch nicht, entsteht es aus dem Quell-Chat', () => {
+    const db = two();
+    mergeChats(db, 'lid1@lid', 'neu@s.whatsapp.net');
+    const row = db.prepare('SELECT * FROM chats WHERE id = ?').get('neu@s.whatsapp.net') as Record<string, unknown>;
+    assert.equal(row.name, 'Anna (LID)');
+    assert.equal(row.last_activity_at, 100);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM messages WHERE chat_id = ?', 'neu@s.whatsapp.net'), 2);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats WHERE id = ?', 'lid1@lid'), 0);
+    assertFtsConsistent(db);
+  });
+
+  it('ein Ziel ohne Namen uebernimmt den des Quell-Chats', () => {
+    const db = two();
+    db.prepare('UPDATE chats SET name = NULL WHERE id = ?').run('pn1@s.whatsapp.net');
+    mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net');
+    assert.equal(scalar(db, 'SELECT name FROM chats WHERE id = ?', 'pn1@s.whatsapp.net'), 'Anna (LID)');
+    assertFtsConsistent(db);
+  });
+
+  it('unbekannter Quell-Chat und gleiche IDs aendern nichts', () => {
+    const db = two();
+    assert.deepEqual(mergeChats(db, 'gibt-es-nicht', 'pn1@s.whatsapp.net'), { moved: 0 });
+    assert.deepEqual(mergeChats(db, 'pn1@s.whatsapp.net', 'pn1@s.whatsapp.net'), { moved: 0 });
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats'), 2);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM messages'), 3);
+  });
+
+  it('Medien-Zeilen haengen an der Nachricht und bleiben unberuehrt; der Quell-Chat ohne Nachrichten wird ebenfalls entfernt', () => {
+    const db = two();
+    insertMessageIfNotExists(db, { id: 'mi', chatId: 'lid1@lid', sender: 'Anna', waTimestamp: 150, receivedAt: 150, direction: 'in', type: 'image', text: 'Bild' });
+    setMediaStatus(db, 'mi', { filePath: '/media/lid1/x.jpg', mimeType: 'image/jpeg', sizeBytes: 5, status: 'ready' });
+    upsertChat(db, { id: 'leer@lid', name: 'Leer', isGroup: false, lastActivityAt: 1 });
+    mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net');
+    assert.equal(scalar(db, 'SELECT file_path FROM media WHERE message_id = ?', 'mi'), '/media/lid1/x.jpg');
+    assert.deepEqual(mergeChats(db, 'leer@lid', 'pn1@s.whatsapp.net'), { moved: 0 });
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats WHERE id = ?', 'leer@lid'), 0);
+    assertFtsConsistent(db);
+  });
+
+  it('bei einem Fehler bleibt alles wie vorher (eine Transaktion)', () => {
+    const db = two();
+    db.exec('DROP TABLE messages_fts_map');
+    assert.throws(() => mergeChats(db, 'lid1@lid', 'pn1@s.whatsapp.net'));
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM chats'), 2);
+    assert.equal(scalar(db, 'SELECT COUNT(*) FROM messages WHERE chat_id = ?', 'lid1@lid'), 2);
   });
 });
 
