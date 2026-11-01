@@ -67,4 +67,8 @@ Stand: 29. Oktober 2026. Keine der Änderungen sendet einen neuen Knoten über d
 | **„Medium jetzt laden“** | **ein HTTPS-Abruf an den Medienhost je Medium**, ausgelöst vom Ingest auf Befehl des Web-Dienstes (der Web-Dienst selbst bleibt ohne ausgehenden Verkehr). Auch das Setzen des Schilds an einer Nachricht mit ladbarem Medium löst einen aus. Kein WebSocket-Knoten (wie jeder Medien-Download); `downloadContentFromMessage` ist nicht auf versteckte Sendeaufrufe geprüft. Ein abgelaufener Link endet mit HTTP 403/404/410 und wird als „bei WhatsApp nicht mehr verfügbar“ vermerkt. Die „Neu-Upload-Anfrage“ an das Telefon wird weiter nie gestellt. | `services/ingest/src/mediaQueue.ts` (`loadDeferred`) |
 | **Einmal-Medien speichern** (`store_view_once = true`, Standard aus) | ein HTTPS-Abruf je Einmal-Medium **bei Ankunft**, wie beim Auto-Download. Ob dem Absender dabei etwas angezeigt wird: UNBEKANNT. | `services/ingest/src/messageHandler.ts` |
 
+### Version 0.2.1: was dazukommt
+
+Keine Funktion von 0.2.1 sendet etwas oder fragt etwas an. Verschlüsselte Bearbeitungen werden lokal entschlüsselt (Geheimnis der Originalnachricht aus dem privaten Speicher), die LID-Zuordnung wird aus dem lokalen Schlüsselspeicher gelesen, Chats werden lokal zusammengeführt, Namen lokal nachgezogen. Das Lesen von Nachrichtenbytes (`decodeMessage` in `waLib.ts`) hat kein Netzwerk. Der Wächter `check:no-send` ist unverändert. Siehe `docs/RELEASE-0.2.1.md`.
+
 Für Einmal-Medien ohne Zweitnummer: Stufe 1 (nur lesen, kein Verkehr) zuerst auswerten (`docs/VERSION2.md`, Abschnitt 3), bevor der Schalter eingeschaltet wird. Mit der Testinstanz und dem Knotenzähler (`count_outgoing_nodes`) lässt sich zusätzlich messen, ob dabei etwas anderes als der HTTPS-Abruf ausgesendet wird.
