@@ -4,7 +4,7 @@
 # Erzeugt danach die Startseite (Pi-Launcher) unter $WEBROOT/index.html neu.
 # Lokale Apps (LOCAL_APPS, derzeit waread) installiert und aktualisiert dieses Skript NICHT. Sie haben eine
 # eigene Installation in eigenen Verzeichnissen. Die Startseite verlinkt sie nur und liest dafür lediglich
-# ihren Installationszustand.
+# ihren Installationszustand und, für das Ziel des Links, den Schlüssel web.passkey_origin aus ihrer Konfiguration.
 set -uo pipefail
 WEBROOT=/var/www/craft
 STATE=${STATE_DIRECTORY:-/var/lib/craft}
@@ -36,13 +36,17 @@ LOCAL_APPS=(
 ALL_APPS=("${APPS[@]}" "${LOCAL_APPS[@]}")   # nur für die Startseite; heruntergeladen wird ausschließlich aus APPS
 # waread: eigene Installation (deploy/install.sh von waread) unter /opt/waread. Hier wird dort nur gelesen.
 WAREAD_HOME=/opt/waread
-# Ziel der waread-Karte. Standard: Pfad auf diesem Host (Nginx-Snippet von waread, deploy/craft-launcher/README.md).
-# Eigener Hostname (z. B. für Passkeys): die ganze URL eintragen, z. B. https://waread.heimnetz.example/
-WAREAD_URL=./waread/
+WAREAD_CONF=/etc/waread/config.toml   # wird nur gelesen, und zwar nur der Schlüssel passkey_origin
+# Ziel der waread-Karte. Leer = automatisch:
+#   - Ist in WAREAD_CONF web.passkey_origin gesetzt (Passkey-Betrieb: eigener Hostname mit HTTPS, also eigener Origin),
+#     zeigt die Karte auf <passkey_origin>/waread/.
+#   - Sonst auf ./waread/ (Pfad auf diesem Host; Nginx-Snippet von waread, deploy/craft-launcher/README.md).
+# Festlegen: die ganze URL eintragen, z. B. https://waread.heimnetz.example/waread/ oder ./waread/
+WAREAD_URL=''
 # Prüft eine lokale App, nur lesend. Rückgabe 0 = installiert.
 # Setzt LOCAL_VER (Version mit "v", leer = unbekannt) und LOCAL_HREF (Ziel der Karte).
 local_probe() {
-  local cur tgt
+  local cur tgt o
   LOCAL_VER=''
   LOCAL_HREF="./$1/"
   case $1 in
@@ -50,7 +54,12 @@ local_probe() {
       # install.sh und waread-update halten /opt/waread/current als Symlink auf releases/<X.Y.Z>.
       cur=$WAREAD_HOME/current
       [[ -L $cur && -f $cur/services/web/dist/server.js ]] || return 1
-      LOCAL_HREF=$WAREAD_URL
+      LOCAL_HREF=${WAREAD_URL:-./waread/}
+      if [[ -z $WAREAD_URL ]]; then
+        # Nur die Zeile passkey_origin = "https://Name[:Port]" (nicht auskommentiert); alles andere wird ignoriert.
+        o=$(sed -nE 's/^[[:space:]]*passkey_origin[[:space:]]*=[[:space:]]*"([^"]*)".*$/\1/p' "$WAREAD_CONF" 2>/dev/null | head -n 1)
+        [[ $o =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] && LOCAL_HREF=$o/waread/
+      fi
       tgt=$(readlink -f -- "$cur" 2>/dev/null) || return 0
       tgt=${tgt##*/}
       [[ $tgt =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && LOCAL_VER="v$tgt"
@@ -528,8 +537,8 @@ for entry in "${APPS[@]}"; do
 done
 # waread (lokale App): nur melden, ob sie erkannt wurde und ob Nginx /waread/ weiterleitet. Ändert nichts.
 if local_probe waread; then
-  echo "waread: installiert ${LOCAL_VER:-(Version unbekannt)}, Karte auf der Startseite"
-  if [[ $WAREAD_URL != *://* ]] && command -v nginx >/dev/null 2>&1; then
+  echo "waread: installiert ${LOCAL_VER:-(Version unbekannt)}, Karte verlinkt auf $LOCAL_HREF"
+  if [[ $LOCAL_HREF != *://* ]] && command -v nginx >/dev/null 2>&1; then
     ngx=$(nginx -T 2>/dev/null || true)
     # Leere Ausgabe (nginx -T lief nicht): nichts melden, denn dann lässt sich nichts beurteilen.
     if [[ -n $ngx ]] && ! grep -Eq '^[[:space:]]*include[[:space:]]+[^;#]*waread\.conf' <<<"$ngx"; then

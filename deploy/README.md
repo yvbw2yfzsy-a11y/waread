@@ -263,7 +263,7 @@ sudo systemctl enable --now waread-update.timer
 
 ## Craft-Garantie
 
-Die optionale Karte auf der Pi-Startseite (`craft-launcher/`) ändert daran nichts: Sie ist eine erweiterte Fassung von `craft-update`, die du selbst einspielst. `install.sh` und `waread-update` installieren sie nicht und fassen `craft-update` weiterhin nicht an. Die erweiterte Fassung liest nur `/opt/waread/current` und schreibt nichts in waread-Verzeichnisse.
+Die optionale Karte auf der Pi-Startseite (`craft-launcher/`) ändert daran nichts: Sie ist eine erweiterte Fassung von `craft-update`, die du selbst einspielst. `install.sh` und `waread-update` installieren sie nicht und fassen `craft-update` weiterhin nicht an. Die erweiterte Fassung liest nur `/opt/waread/current` und aus `/etc/waread/config.toml` den Schlüssel `passkey_origin` (für das Ziel des Links), und sie schreibt nichts in waread-Verzeichnisse.
 
 `install.sh` und `waread-update` schreiben ausschließlich nach `/opt/waread`, `/etc/waread`, `/var/lib/waread`, `/etc/systemd/system/waread-*`, `/etc/nginx/snippets/waread.conf` und `/usr/local/sbin/waread-update`. Beide Skripte löschen ausschließlich Verzeichnisse unterhalb von `/opt/waread/releases/` und verweigern jeden Löschpfad, der `craft` enthält. `install.sh` bricht außerdem beim Start ab, falls einer seiner eigenen Zielpfade `craft` enthielte. Nginx wird nur mit `nginx -t` geprüft und nur dann neu geladen, wenn das Snippet bereits eingebunden ist; ein Reload lädt die bestehende Konfiguration unverändert neu.
 
