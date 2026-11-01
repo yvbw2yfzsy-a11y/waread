@@ -76,3 +76,7 @@ Für Einmal-Medien ohne Zweitnummer: Stufe 1 (nur lesen, kein Verkehr) zuerst au
 ### Version 0.2.2: was dazukommt
 
 Nichts. 0.2.2 entfernt Code und korrigiert die Anzeige des Zitats einer Umfrage; keine Anfrage und kein Knoten kommt hinzu oder fällt weg. Der Wächter `check:no-send` ist unverändert grün, die Hülle `waLib.ts` ist unverändert. Siehe `docs/RELEASE-0.2.2.md`.
+
+### Version 0.2.3: was dazukommt
+
+Nichts. 0.2.3 ändert Hinweistext, Menü und Journalzeile für Einmal-Medien, die live ohne Inhalt eintreffen. Für diese Nachrichten schickt auch die Bibliothek keine Anfrage an das Handy (kein Placeholder-Resend, `decode-wa-message.js` und `messages-recv.js`, gelesen). Ein von waread ausgelöster Placeholder-Resend wäre neuer Verkehr und ist bewusst nicht eingebaut (`docs/RELEASE-0.2.3.md`, Abschnitt 3). Der Wächter `check:no-send` ist unverändert grün, die Hülle `waLib.ts` ist unverändert.

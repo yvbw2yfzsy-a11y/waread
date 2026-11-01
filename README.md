@@ -10,7 +10,9 @@ waread ist eine **rein lesende** Web-Oberfläche für die eigenen WhatsApp-Nachr
 
 **Version 0.2.2** räumt auf: Code, der nichts tat oder doppelt vorhanden war, ist entfernt (zweite Suche im Datenbankpaket, Altpfade, ungenutzte Hilfen und CSS), dazu eine Korrektur beim Zitat von Umfragen. Funktion, Datenbank und Konfiguration bleiben gleich. Einzelheiten: `docs/RELEASE-0.2.2.md`.
 
-Stand: Version 0.2.2 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
+**Version 0.2.3** betrifft Einmal-Medien: Live eintreffende Einmal-Fotos, -Videos und -Sprachnachrichten schickt WhatsApp verknüpften Geräten ohne Inhalt und ohne Schlüssel, waread kann sie deshalb weder anzeigen noch speichern. Hinweiszeile, Menü und Journal sagen das jetzt richtig. Einzelheiten: `docs/RELEASE-0.2.3.md`.
+
+Stand: Version 0.2.3 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
 
 ## Aufbau
 
@@ -59,6 +61,7 @@ Installation auf dem Pi von Hand, Konfiguration, Kopplung und die Prüfungen vor
 | `docs/RELEASE-0.2.0.md` | Release 0.2.0: Inhalt, Bauen, Einspielen auf dem Pi, Prüfschritte, Ungeprüftes |
 | `docs/RELEASE-0.2.1.md` | Release 0.2.1: Fehlerkorrekturen aus dem Test mit einem Zweitkonto, Daten, Prüfschritte, Offenes |
 | `docs/RELEASE-0.2.2.md` | Release 0.2.2: Aufräumen (entfernter Code und warum er weg kann), eine Fehlerkorrektur, Tests, Offenes |
+| `docs/RELEASE-0.2.3.md` | Release 0.2.3: warum live eintreffende Einmal-Medien nicht ladbar sind, ehrliche Anzeige und Journalzeile, Prüfschritte, Offenes |
 | `docs/VERKEHR.md` | Was die Bibliothek an WhatsApp schickt und was waread dazu beiträgt, je Version |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
