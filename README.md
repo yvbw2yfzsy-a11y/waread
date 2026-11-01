@@ -6,7 +6,9 @@ waread ist eine **rein lesende** Web-Oberfläche für die eigenen WhatsApp-Nachr
 
 **Version 0.2.0** bringt außerdem eine Oberfläche im Stil von iOS mit WhatsApp-Aufbau (`docs/DESIGN.md`) und Profilbilder (ab Werk aus, `docs/PROFILBILDER.md`). Einspielen und Prüfen: `docs/RELEASE-0.2.0.md`.
 
-Stand: Version 0.2.0 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
+**Version 0.2.1** behebt Fehler aus einem Test mit einem echten Zweitkonto: Bearbeitungen im neuen verschlüsselten Format, Einmal-Medien, die live nur als Hinweis ankommen, doppelte Chats (LID und Nummer), Chatnamen, Reihenfolge und Anzeige. Was sich ändert und wie man es prüft: `docs/RELEASE-0.2.1.md`.
+
+Stand: Version 0.2.1 (Datei `VERSION`). Das Projekt ist in einer Bauumgebung ohne Zugriff auf die npm-Registry, ohne WhatsApp-Konto und ohne Raspberry Pi entstanden. Was dort geprüft wurde und was nicht, steht in `docs/MERGE_NOTES.md`.
 
 ## Aufbau
 
@@ -53,6 +55,7 @@ Installation auf dem Pi von Hand, Konfiguration, Kopplung und die Prüfungen vor
 | `docs/DESIGN.md` | Gestaltung im iOS-Stil: Variablen, Kontrastwerte, Tippflächen, was geprüft ist und was nicht |
 | `docs/PROFILBILDER.md` | Profilbilder: Ablauf, Grenzen, Verkehr, warum „blockiert“ nicht erkennbar ist |
 | `docs/RELEASE-0.2.0.md` | Release 0.2.0: Inhalt, Bauen, Einspielen auf dem Pi, Prüfschritte, Ungeprüftes |
+| `docs/RELEASE-0.2.1.md` | Release 0.2.1: Fehlerkorrekturen aus dem Test mit einem Zweitkonto, Daten, Prüfschritte, Offenes |
 | `docs/MERGE_NOTES.md` | Was beim Zusammenführen geprüft, geändert, angenommen wurde; offene Punkte |
 | `deploy/README.md` | Release-Vertrag, Installationsskript, Updater, Units, Nginx |
 | `services/*/README.md`, `cleanup/README.md`, `db/README.md` | Verhalten und Grenzen je Baustein |
