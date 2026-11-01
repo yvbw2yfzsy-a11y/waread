@@ -133,6 +133,13 @@ describe('normalizeMessage: Zitat-Kurztext und Bearbeitung', () => {
     assert.equal(s.replyType, 'sticker')
   })
 
+  for (const v of ['', 'V2', 'V3', 'V4', 'V5']) {
+    it(`eine zitierte Umfrage (pollCreationMessage${v}) zeigt Titel und Typ`, () => {
+      const m = msgOf(reply({ [`pollCreationMessage${v}`]: { name: 'Pizza?', options: [{ optionName: 'Ja' }] } }))
+      assert.deepEqual([m.replyText, m.replyType], ['📊 Umfrage: Pizza?', 'text'])
+    })
+  }
+
   it('Absender ohne bekannten Namen: Telefonnummer; ohne participant: kein Absender; ohne Zitat: nichts', () => {
     assert.equal(msgOf(reply({ conversation: 'x' })).replySender, '+491709999999')
     const noPart = msgOf(rawMsg({ extendedTextMessage: { text: 'A', contextInfo: { stanzaId: 'O', quotedMessage: { conversation: 'x' } } } }))

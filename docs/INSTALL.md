@@ -287,7 +287,7 @@ done
 
 ### 6.1 `tmp/` im Arbeitsspeicher (optional, empfohlen)
 
-Die Ingest-Unit setzt `TMPDIR=/var/lib/waread/tmp`, und die Cleanup-Dienste legen dort ihre Sperrdatei `cleanup.lock` ab. Die Teildateien des Ingest (`*.part`, Vorschau, Sprachumwandlung) liegen **nicht** hier, sondern neben der Zieldatei im Medienordner; `tmp_dir` in der Konfiguration wertet der Code nicht aus. Ob Bibliotheken (sharp, ffmpeg) `TMPDIR` für eigene Zwischendateien nutzen, ist UNBEKANNT. Im Arbeitsspeicher (tmpfs) schont das die SD-Karte also nur für das, was tatsächlich dort landet. Die Dienste laufen zu diesem Zeitpunkt noch nicht (`--no-start`).
+Die Ingest-Unit setzt `TMPDIR=/var/lib/waread/tmp`, und die Cleanup-Dienste legen dort ihre Sperrdatei `cleanup.lock` ab. Die Teildateien des Ingest (`*.part`, Vorschau, Sprachumwandlung) liegen **nicht** hier, sondern neben der Zieldatei im Medienordner. Ob Bibliotheken (sharp, ffmpeg) `TMPDIR` für eigene Zwischendateien nutzen, ist UNBEKANNT. Im Arbeitsspeicher (tmpfs) schont das die SD-Karte also nur für das, was tatsächlich dort landet. Die Dienste laufen zu diesem Zeitpunkt noch nicht (`--no-start`).
 
 ```bash
 echo "tmpfs /var/lib/waread/tmp tmpfs rw,nosuid,nodev,noexec,nofail,size=256m,mode=0700,uid=$(id -u waread),gid=$(id -g waread) 0 0" \

@@ -38,11 +38,6 @@ export {
 // Ingest-spezifische Zusatzabfragen (NICHT Teil des Vertrags; reines SQL gegen die Vertragstabellen)
 // ---------------------------------------------------------------------------------------------
 
-/** Stellt sicher, dass eine media-Zeile existiert. Wirft (Fremdschluessel), wenn die Nachricht fehlt. */
-export function ensureMediaRow(db: Database, messageId: string): void {
-  db.prepare('INSERT OR IGNORE INTO media (message_id) VALUES (?)').run(messageId)
-}
-
 /** Nachrichten-IDs aller Medien-Zeilen mit einem der Status (Neustart-Wiederherstellung). */
 export function listMediaIdsByStatus(db: Database, statuses: MediaStatus[]): string[] {
   const marks = statuses.map(() => '?').join(', ')
